@@ -22,6 +22,13 @@ and writes the final synthesis.
     --inline         No panes: teammates run as in-session subagents
     --help           Show this help
 
+## Before spawning
+Every run starts with the lead brainstorming the task with you: it re-reads the earlier
+conversation, `.team/facts.md` and the last run's synthesis, asks whatever questions
+change the work, then writes back the task, the roles, what is out of scope and how the
+result gets verified. Teammates spawn only after you approve that — a wrong assumption
+otherwise gets paid once per teammate.
+
 ## Choosing roles
 - List them in the task (`Roles: security: …, perf: …, skeptic: …`) — used as-is.
   A bare name matching `.team/roles/<name>.md` loads that saved spec.
