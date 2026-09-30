@@ -7,6 +7,8 @@
 #   team.sh clean <team>  -> removes the team's worktrees that have no uncommitted changes (branches kept)
 # --worktree: the teammate works in its own git worktree .team/worktrees/<team>-<role>
 # on a new branch team/<team>-<role> (from the current HEAD), like a separate person.
+# Each new worktree is pre-accepted in ~/.claude.json so the workspace-trust prompt
+# does not appear in every pane (a worktree is its own git top-level, so it cannot inherit it).
 # Every pane/tab is titled <team>-<role> (Claude's own terminal-title updates are disabled so it sticks).
 # Teammates get the caveman output style (~/.agents/skills/caveman/SKILL.md) unless --no-caveman.
 # Backend: a cmux tab in the lead's workspace when running inside cmux, else a tmux pane
@@ -98,6 +100,24 @@ if [ -n "$worktree" ]; then
   dir="$root/.team/worktrees/$team-$role"
   [ -d "$dir" ] || git -C "$root" worktree add -q -b "team/$team-$role" "$dir" HEAD
   echo "worktree $dir (branch team/$team-$role)"
+  # A worktree is its own git top-level, so it never inherits the repo's workspace
+  # trust and `claude` would raise the trust prompt in every pane. Pre-accept this
+  # one path. Best-effort: a failure here only means the prompt comes back.
+  TEAM_TRUST_DIR="$dir" python3 - <<'PY' || echo "warn: could not pre-trust $dir; expect a trust prompt" >&2
+import json, os, sys
+p = os.path.expanduser("~/.claude.json")
+d = os.path.abspath(os.environ["TEAM_TRUST_DIR"])
+with open(p, encoding="utf-8") as f:
+    cfg = json.load(f)
+projects = cfg.setdefault("projects", {})
+if projects.setdefault(d, {}).get("hasTrustDialogAccepted") is True:
+    sys.exit(0)
+projects[d]["hasTrustDialogAccepted"] = True
+tmp = f"{p}.team-{os.getpid()}.tmp"
+with open(tmp, "w", encoding="utf-8") as f:
+    f.write(json.dumps(cfg, indent=2, ensure_ascii=False))
+os.replace(tmp, p)
+PY
 fi
 title="$team-$role"
 cavefile="$HOME/.agents/skills/caveman/SKILL.md"
