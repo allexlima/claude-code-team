@@ -1,0 +1,64 @@
+---
+name: team
+description: Emulate Claude Code agent teams — one interactive claude session per role in its own cmux/tmux pane (or tab), a shared task file, cross-session messaging for challenge rounds, and a git-ignored .team/ folder with reusable roles, run records, and a verified-facts ledger. Use when the user runs /team or asks for a "team", "debate", or multiple agents that challenge each other's findings.
+argument-hint: "<task> [--roles N] [--rounds N] [--model sonnet|opus|haiku] [--autoroles] [--tabs] [--tmux] [--no-gate] [--no-caveman] [--autoclose] [--inline] [--help]"
+---
+
+# /team — agent team emulation
+
+**If the arguments are empty or contain `--help`:** print `~/.claude/skills/team/HELP.md` to the user verbatim (as markdown) and stop — do not start a team.
+
+You are the **lead**. Each teammate is a separate interactive `claude` session in its own pane — in cmux, a split of the lead's tab with teammates stacked on the right (`--tabs`: one cmux tab each instead); outside cmux, a tmux pane (`--tmux` forces tmux) — named and titled `<team>-<role>` (the title stays fixed so the user can manage panes), reachable with SendMessage. Teammates can message each other directly. Defaults: 3 roles, 1 challenge round, teammates inherit the lead's model. `--inline` runs teammates as in-session named subagents instead (no panes; see the end).
+
+## 0. Workspace
+Pick a short team slug (e.g. `rev1`) and run `bash ~/.claude/skills/team/team.sh init <team>` from the working directory. It creates/keeps `.team/` at the project root (git root, else cwd), adds `.team/` and `CLAUDE.local.md` to `.gitignore` in a git repo, adds a pointer note to `CLAUDE.local.md` once, and prints this run's dir `<run>` (`.team/runs/<date>-<team>/`). Read `.team/facts.md` and list `.team/roles/`.
+
+**Run type.** If the task edits code *and* the project is a git repo, this is a **build run**: every teammate works like a separate person — its own git worktree `.team/worktrees/<team>-<role>` on branch `team/<team>-<role>`, its own commits, and (unless `--no-gate`) its own **no-mistakes** gate run that reviews/tests/lints, pushes the branch, and opens a PR. Otherwise (read-only task, or not a git repo) it's a **review run**: no worktrees, no gate; editing roles get exclusive files instead.
+
+## 1. Plan the team
+- **If the user listed roles in the task, use exactly those** — a bare name that matches `.team/roles/<name>.md` loads that spec.
+- Otherwise, with `--autoroles`, do a quick, cheap scan (a few commands, no deep reads; never print secrets or data files): CLAUDE.md / README, top-level layout and languages, test and CI setup, `git status` / `git diff --stat` / recent `git log` if it's a repo, and stack markers (`databricks.yml`, notebooks, `pyproject.toml`, `package.json`, Dockerfiles). **Prefer existing `.team/roles/` specs** that fit; invent new roles only for uncovered lenses (e.g. diff spanning `src/api` + `src/ui` → `backend` + `frontend`; bundle + notebooks → `dabs-config` + `pipeline-logic`; missing tests → `tests`). Show the roster as a table (role · lens · owns · one-line *why* citing the file/signal, marking reused vs new) and **wait for the user's OK or edits before spawning**.
+- Without either, pick N roles (3–5) from the task text.
+- Each role: kebab-case name, one lens, and — if the task edits code — an **exclusive set of files**. Never let two roles edit the same file. Research/review/debug: include one adversarial role.
+- Save each new approved role to `.team/roles/<role>.md` (lens, typical scope, constraints, preferred model) so later runs can reuse it. Don't overwrite an existing spec unless the user asks.
+- Write `<run>/tasks.md`: one line per role (`- [ ] <team>-<role>: <scope> — owns: <files or "read-only">`).
+- Run ListAgents once and note this session's own name (the "This session is …" line) — that is `<lead>`.
+- Show the roster in one short table and proceed (unless waiting for `--autoroles` approval). **Build run with gate:** the roster must say that each teammate will push `team/<team>-<role>` and open a PR, and you must **wait for the user's OK** before spawning (it publishes to the remote). Then run `bash ~/.claude/skills/team/team.sh gate-init` once from the repo: it sets up the no-mistakes gate (adds a local `no-mistakes` git remote). Exit code 3 = gate unavailable (not installed or no `origin`) — tell the user and continue as a build run without the gate.
+
+## 2. Spawn (one pane per role)
+For each role, write its prompt to `<run>/prompts/<role>.md`, then run from the working directory:
+`bash ~/.claude/skills/team/team.sh spawn [--tmux] [--tabs] [--worktree] [--no-caveman] <team> <role> <run>/prompts/<role>.md [model]`
+(`--worktree` for every build-run teammate; `--tmux` / `--tabs` / `--no-caveman` only if the user gave them). Teammates start in auto permission mode, with a fixed pane/tab title, and with the caveman terse-output style unless `--no-caveman`. The script prints where the pane/tab opened; relay that (for a detached tmux session, the user runs `tmux attach -t team-<team>`).
+
+Each prompt must be self-contained (teammates don't see this conversation) and include: goal, lens (from the role spec if reused), files owned / readable, constraints, the roster (all `<team>-<role>` names), and these instructions:
+- "You are `<team>-<role>` on a team led by `<lead>`. You may message teammates directly with SendMessage (use ListAgents if a name doesn't resolve)."
+- "Use parallel subagents as much as possible: whenever you have 2+ independent sub-tasks (exploring areas, reviewing files, running checks, drafting separate pieces), dispatch them with the Agent tool in a single message so they run concurrently, and keep your own context for coordination and verification. Do sequential work yourself only when steps depend on each other."
+- "First read `<abs>/.team/facts.md`: treat entries as leads to re-check, not ground truth; report any you find contradicted as STALE."
+- Build run only: "You work in your own git worktree `<abs worktree>` on branch `team/<team>-<role>` — edit and commit only there (small, focused commits; never touch other teammates' worktrees or the main checkout). Stay inside your scope so your PR doesn't conflict with teammates'. When your work is committed and verified, gate it: `no-mistakes axi run --intent \"<your goal in one sentence>\"` (never `--yes`). At each approval point: `no-mistakes axi respond --action fix` for actionable findings; ask the user in this pane for judgment calls, protected-path or unvalidated-test refusals — never approve those yourself. If `--wait` elapses, reattach with `no-mistakes axi status`. Include your branch, the gate outcome, and the PR URL in your report." (If the gate is off, replace the gate part with: "leave your commits on the branch; don't push.")
+- "When done, write your report to `<abs run>/reports/<role>.md`, tick your line in `<abs run>/tasks.md`, then SendMessage the same report to `<lead>`, then wait for further messages. Format:"
+```
+FINDINGS: numbered, each with evidence (file:line, command output, or source)
+CONFIDENCE: high/medium/low per finding
+STALE FACTS: facts.md entries contradicted, with evidence (or "none")
+OPEN QUESTIONS: what you couldn't verify
+```
+After spawning, run ListAgents to confirm every teammate appears (retry briefly; sessions take a few seconds to start). If one doesn't, read its screen (`cmux read-screen --surface <ref> --lines 30` or `tmux capture-pane -p -t <pane-id>`; ids are in `/tmp/team-<team>.tabs`) to see why — e.g. a trust or permission prompt the user must answer in that pane — and tell the user.
+
+## 3. Challenge rounds (default 1)
+When all reports are in, SendMessage each teammate the *other* teammates' findings, labeled by name: "Try to disprove or refine these using evidence — message the author directly if useful. Then append your AGREE / DISPUTE (with evidence) / REFINE per finding and revised list to your report file, and send it to me." Send all before waiting. Relay faithfully — never present your own claims as a teammate's.
+
+## 4. Synthesize and record
+Report: build runs first list each teammate's branch, gate outcome, and PR URL, and flag any teammates whose branches touch the same files (merge-conflict risk). Then **Consensus** (survived challenge, with evidence) · **Disputed** (each side's best evidence) · **Dropped** (refuted, one line each) · **Next steps**. Save the same text to `<run>/synthesis.md`.
+Update `.team/facts.md`: append **consensus findings only** as one line each (`- <fact> — evidence: <file:line | command> — <YYYY-MM-DD>, run <run dir name>`), and for each confirmed STALE fact, strike it through with a pointer to the contradicting run (don't delete). Never write secrets, PII, raw data, or unverified claims. Tell the user how many facts were added / marked stale.
+Leave panes open so the user can keep talking to teammates — unless `--autoclose` was given, in which case shut the team down right after this step. When the user says the team is done ("shut down the team"), SendMessage each teammate that the team is done, then run `bash ~/.claude/skills/team/team.sh close <team>` (closes every recorded pane/tab; the run record in `.team/` stays). For build runs, also run `bash ~/.claude/skills/team/team.sh clean <team>` — removes worktrees without uncommitted changes (branches and PRs stay); report any it kept.
+
+## Rules
+- Don't do teammates' work yourself; wait for their messages. If one stalls, message it; if it died, respawn with the same name.
+- Every claim in the synthesis and facts.md must trace to a teammate's evidence.
+- Teammate permission prompts appear in *their* panes — tell the user to approve there. Never relay approvals between sessions.
+- Haiku teammates fall back to manual permission mode (auto mode isn't available on Haiku), so they'll prompt in their panes — warn the user if they pick `--model haiku`.
+- Keep your own synthesis to the user in normal prose (caveman style is for teammates only).
+- Cost: each teammate is a full session. Prefer fewer, sharper roles; suggest `--model sonnet` for broad sweeps.
+
+## --inline mode
+Skip `team.sh spawn`/`close` (still run `init`); no worktrees or gate — inline teammates share your working tree, so give editing roles exclusive files. Spawn all teammates in one message with the Agent tool (`name: <role>`, `model` if given), same prompts minus the pane/ListAgents lines; their reports return to you automatically (write them to `<run>/reports/` yourself). Challenge rounds use SendMessage `to: <role>`. No panes to clean up.
