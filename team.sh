@@ -9,6 +9,10 @@
 #   team.sh show <team> <role>  -> bring a parked teammate back into its own pane
 #   team.sh list <team>         -> each teammate: working / parked / closed
 #   team.sh models              -> models available here, best tier first
+#   team.sh role <name>         -> print a role spec path (project override, then shared library); exit 3 if none
+#   team.sh roles               -> list roles available here: "<name>  project|user  <path>"
+#   team.sh facts-lint [--pre-append <file>]  -> freshness of .team/facts.md facts (FRESH/CHECK/GONE/NOANCHOR + DUP); --pre-append scans <file> for secrets
+#   team.sh doccheck            -> doc drift guard: retired phrases, subcommands documented, SKILL flags present in HELP
 # --worktree: the teammate works in its own git worktree .team/worktrees/<team>-<role>
 # on a new branch team/<team>-<role> (from the current HEAD), like a separate person.
 # Each new worktree is pre-accepted in ~/.claude.json so the workspace-trust prompt
@@ -18,7 +22,7 @@
 # subagents, verify what they return), plus the caveman output style unless --no-caveman.
 # Backend: a cmux tab in the lead's workspace when running inside cmux, else a tmux pane
 # (splits the lead's window inside tmux, otherwise a detached session "team-<team>").
-# cmux default: split the lead's tab — first teammate to the right, the rest stacked below it.
+# cmux default: split the lead's tab — teammates fill a two-column grid to the right of the lead.
 # --tabs (cmux): one tab per teammate instead. --tmux forces tmux.
 # Teammates start in auto permission mode (override with TEAM_PERMISSION_MODE). Spawned tabs/panes are recorded in /tmp/team-<team>.tabs for close.
 set -euo pipefail
@@ -28,7 +32,7 @@ if [ "$sub" = init ]; then
   team=${1:?team}
   root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
   d="$root/.team"
-  mkdir -p "$d/roles" "$d/runs"
+  mkdir -p "$d/roles" "$d/runs" "${TEAM_ROLES_DIR:-$HOME/.claude/team/roles}"
   [ -f "$d/README.md" ] || cat > "$d/README.md" <<'MD'
 # .team — /team skill workspace (git-ignored)
 - `facts.md` — verified facts from past runs (consensus only, with evidence). Read before working; flag stale entries.
@@ -38,7 +42,7 @@ Never store secrets, PII, or raw data here — conclusions and pointers only.
 MD
   [ -f "$d/facts.md" ] || printf '# Facts
 
-<!-- - <fact> — evidence: <file:line | command> — <YYYY-MM-DD>, run <run-id> -->
+<!-- - <fact> — evidence: <file:line | command> @<short-sha> — <YYYY-MM-DD>, run <run-id>  (@nogit outside a repo) -->
 ' > "$d/facts.md"
   if git -C "$root" rev-parse 2>/dev/null; then
     for p in .team/ CLAUDE.local.md; do
@@ -138,6 +142,93 @@ if [ "$sub" = models ]; then
            u=m[i]; while (length(u)<b) u=u" "
            print s"  "u"  ["t[i]"]"}}'
   exit 0
+fi
+
+# Resolve a role spec by exact name: this project's .team/roles/ overrides the shared
+# user library. Prints the winning path; exit 3 if neither has it (the lead then invents
+# the role and saves it). Pure bash, so it adds nothing to the python3 dependency surface.
+if [ "$sub" = role ]; then
+  name=${1:?role name}
+  case $name in *[!a-z0-9-]*|'') echo "role names are kebab-case: $name" >&2; exit 2 ;; esac
+  root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+  lib=${TEAM_ROLES_DIR:-$HOME/.claude/team/roles}
+  for f in "$root/.team/roles/$name.md" "$lib/$name.md"; do
+    [ -f "$f" ] && { echo "$f"; exit 0; }
+  done
+  echo "no role '$name' in $root/.team/roles or $lib" >&2; exit 3
+fi
+
+# List roles available here: project roles (which override) first, then the shared
+# library. Columns: "<name>  project|user  <path>". A missing dir is skipped, not an
+# error, so a fresh machine with no library lists this project's roles only.
+if [ "$sub" = roles ]; then
+  root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+  lib=${TEAM_ROLES_DIR:-$HOME/.claude/team/roles}
+  for f in "$root"/.team/roles/*.md "$lib"/*.md; do
+    [ -f "$f" ] || continue
+    case $f in "$root"/*) s=project ;; *) s=user ;; esac
+    printf '%s\t%s\t%s\n' "$(basename "$f" .md)" "$s" "$f"
+  done | awk -F'\t' '!seen[$1]++ {printf "%s\t%s\t%s\n",$1,$2,$3}'
+  exit 0
+fi
+
+# Facts ledger health. Default: classify each fact in .team/facts.md by freshness of its
+# SHA-anchored evidence (FRESH = cited file unchanged since the SHA; CHECK = changed or
+# unanchorable; GONE = cited file deleted; NOANCHOR = legacy/@nogit line) and flag exact
+# duplicate facts (DUP). With --pre-append <file>: scan <file> for secret/PII patterns and
+# refuse (exit 2) on a hit, before new facts are written. Pure bash + git, no python3.
+if [ "$sub" = facts-lint ]; then
+  secret='dapi[0-9a-f]{32}|ghp_[0-9A-Za-z]{36}|sk-[0-9A-Za-z]{16}|AKIA[0-9A-Z]{16}|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
+  if [ "${1:-}" = --pre-append ]; then
+    f=${2:?file to scan}
+    if grep -nEi -- "$secret" "$f"; then
+      echo "facts-lint: secret/PII pattern above — refusing to append" >&2; exit 2
+    fi
+    echo "facts-lint: no secret/PII pattern found in $f"; exit 0
+  fi
+  root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+  facts="$root/.team/facts.md"
+  [ -f "$facts" ] || { echo "no $facts" >&2; exit 3; }
+  while IFS= read -r line; do
+    case $line in
+      '- '*) [ "${line#- \~\~}" = "$line" ] || continue ;;  # skip struck-through facts
+      *) continue ;;
+    esac
+    sha=$(printf '%s\n' "$line" | sed -n 's/.*@\([0-9a-f]\{7,40\}\).*/\1/p')
+    file=$(printf '%s\n' "$line" | grep -oE '[A-Za-z0-9_./-]+:[0-9]+' | head -1 | cut -d: -f1)
+    if printf '%s\n' "$line" | grep -q '@nogit' || [ -z "$sha" ]; then st=NOANCHOR
+    elif [ -z "$file" ]; then st=CHECK
+    elif [ ! -e "$root/$file" ] && [ ! -e "$file" ]; then st=GONE
+    elif git -C "$root" diff --quiet "$sha" -- "$file" 2>/dev/null; then st=FRESH
+    else st=CHECK
+    fi
+    printf '%s\t%s\n' "$st" "$line"
+  done < "$facts"
+  # exact-duplicate fact text (the part before " — evidence"); || true so an empty
+  # ledger (grep finds no facts, exits 1) doesn't trip set -o pipefail.
+  { grep -E '^- ' "$facts" | grep -v '^- ~~' | sed 's/ — evidence:.*//' \
+    | sort | uniq -d | while IFS= read -r d; do [ -n "$d" ] && printf 'DUP\t%s\n' "$d"; done; } || true
+  exit 0
+fi
+
+# Deterministic doc-drift guard (the user's rule: deterministic checks belong in a hook,
+# not prose). Flags retired drift phrases, confirms every subcommand is documented in the
+# header, and confirms every --flag in SKILL.md's argument-hint is explained in HELP.md.
+# Exit 1 if anything is off. Edit the owner file (see CLAUDE.md), then re-run.
+if [ "$sub" = doccheck ]; then
+  here=$(cd "$(dirname "$0")" && pwd); rc=0
+  for pat in 'inherit the lead' 'stacked' '3–5'; do
+    grep -rnF -- "$pat" "$here/SKILL.md" "$here/HELP.md" "$here/README.md" 2>/dev/null && rc=1
+  done
+  hdr=$(sed -n '1,27p' "$here/team.sh")
+  for s in init gate-init clean close models role roles facts-lint doccheck park show list spawn; do
+    printf '%s\n' "$hdr" | grep -qw -- "$s" || { echo "doccheck: subcommand '$s' not documented in the header" >&2; rc=1; }
+  done
+  for fl in $(sed -n '4p' "$here/SKILL.md" | grep -oE '\-\-[a-z-]+'); do
+    grep -qF -- "$fl" "$here/HELP.md" || { echo "doccheck: $fl is in SKILL.md but not HELP.md" >&2; rc=1; }
+  done
+  [ "$rc" = 0 ] && echo "doccheck: ok"
+  exit "$rc"
 fi
 
 # Pane <-> tab lifecycle. A teammate's pane is the user's live audit view, so the

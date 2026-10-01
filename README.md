@@ -20,7 +20,7 @@ It emulates Claude Code's experimental [agent teams](https://code.claude.com/doc
 - **Challenge rounds** — each teammate gets the others' findings and must AGREE / DISPUTE / REFINE with evidence. Output: *Consensus · Disputed · Dropped · Next steps*.
 - **Build runs work like a real team** — in a git repo, each teammate gets its own worktree and branch, commits its own work, and gates it through [no-mistakes](https://github.com/kunchenguid/no-mistakes) (review → test → lint → push → PR). One PR per teammate.
 - **`--autoroles`** — derives roles from your project (README, layout, tests, git diff, stack) and asks you to confirm.
-- **Project memory in `.team/`** (git-ignored) — reusable role specs, a full record of every run, and a `facts.md` ledger of verified findings that future teams read first.
+- **Project memory in `.team/`** (git-ignored) — project role specs (plus a shared role library in `~/.claude/team/roles/`), a full record of every run, and a `facts.md` ledger of verified findings that future teams read first.
 - **Token-aware** — teammates use parallel subagents and the [caveman](https://github.com/JuliusBrussee/caveman) terse style for agent-to-agent chatter; your summary stays in normal prose.
 
 ## Install
@@ -56,13 +56,13 @@ That's it — start (or restart) Claude Code and run `/team --help`.
 /team research vector search options for our RAG demo --tabs --autoclose
 ```
 
-Name roles yourself if you like — `Roles: security: auth + tokens, perf: DB queries, skeptic: challenge the others`. A saved role in `.team/roles/<name>.md` can be loaded by name.
+Name roles yourself if you like — `Roles: security: auth + tokens, perf: DB queries, skeptic: challenge the others`. Saved roles load by name — first from the project (`.team/roles/`), then from your shared library (`~/.claude/team/roles/`). See `/team --help`.
 
 | Option | Effect |
 |---|---|
 | `--roles N` | Number of teammates (default 3) |
 | `--rounds N` | Challenge rounds after the first reports (default 1) |
-| `--model M` | Teammate model (default: the lead's) |
+| `--model M` | Force one model for all roles (default: the lead fits one per role) |
 | `--autoroles` | Propose roles from the project; waits for your OK |
 | `--tabs` | One cmux tab per teammate instead of split panes |
 | `--tmux` | Force tmux even inside cmux |
@@ -84,7 +84,7 @@ When you're done, say **"shut down the team"**.
 ```
 .team/                       (git-ignored; pointer added to CLAUDE.local.md, never CLAUDE.md)
 ├── facts.md                 verified findings: fact — evidence — date, run
-├── roles/<role>.md          reusable role specs
+├── roles/<role>.md          project roles (override ~/.claude/team/roles/)
 ├── runs/<date>-<team>/      tasks.md · prompts/ · reports/ · synthesis.md
 └── worktrees/               build-run worktrees
 ```

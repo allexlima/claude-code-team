@@ -32,7 +32,8 @@ otherwise gets paid once per teammate.
 
 ## Choosing roles
 - List them in the task (`Roles: security: …, perf: …, skeptic: …`) — used as-is.
-  A bare name matching `.team/roles/<name>.md` loads that saved spec.
+  A bare name loads a saved role: this project's `.team/roles/<name>.md` first,
+  else your shared library `~/.claude/team/roles/<name>.md`.
 - Or `--autoroles` — derived from the project (reusing saved roles first),
   shown with reasons, you confirm. Approved new roles are saved for reuse.
 - Otherwise the lead picks roles from the task text alone.
@@ -81,10 +82,15 @@ Created at the project root on first run (git-ignored, along with CLAUDE.local.m
 a one-time pointer note is added to CLAUDE.local.md — never to CLAUDE.md):
     .team/facts.md             Consensus findings with evidence + date + run id;
                                every teammate reads it first and flags stale entries
-    .team/roles/<role>.md      Reusable role specs
+    .team/roles/<role>.md      Roles saved in this project (override shared roles)
     .team/runs/<date>-<team>/  tasks.md · prompts/ · reports/ · synthesis.md
     .team/worktrees/           build-run worktrees (removed on shutdown if clean)
 Only conclusions and pointers are stored — never secrets, PII, or raw data.
+
+Shared role library: `~/.claude/team/roles/` (outside any repo; roles land there only
+when you agree to promote one — make it a private git repo to sync machines). On a new
+machine it starts empty until you sync it, so your saved roles are not lost, just not
+there yet.
 
 ## Where teammates appear
     In cmux (default)   Your tab splits: you on the left, teammates in a two-column

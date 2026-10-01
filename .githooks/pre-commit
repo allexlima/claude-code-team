@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Pre-commit hook: run the /team doc-drift guard (team.sh doccheck) and block the
+# commit if the docs drifted.
+#
+# Enable on a machine with no global hooks path:
+#   git config core.hooksPath .githooks
+#
+# If `core.hooksPath` is ALREADY set globally (e.g. a Databricks secret-scanning
+# hook — check with `git config --get core.hooksPath`), do NOT override it: that
+# would disable the global hook for this repo. Run `bash team.sh doccheck` in CI
+# or as a manual pre-push check instead.
+exec bash "$(git rev-parse --show-toplevel)/team.sh" doccheck
