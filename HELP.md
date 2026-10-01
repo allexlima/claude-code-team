@@ -83,7 +83,8 @@ a one-time pointer note is added to CLAUDE.local.md — never to CLAUDE.md):
 Only conclusions and pointers are stored — never secrets, PII, or raw data.
 
 ## Where teammates appear
-    In cmux (default)   Your tab splits: you on the left, teammates stacked right
+    In cmux (default)   Your tab splits: you on the left, teammates in a two-column
+                        grid on the right; idle ones fold away into tabs
     cmux + --tabs       A new tab per teammate in the current workspace
     Inside tmux         Panes split from your current window
     Neither             Detached tmux session — run: tmux attach -t team-<team>
@@ -97,9 +98,12 @@ Only conclusions and pointers are stored — never secrets, PII, or raw data.
     /team quick sanity review of src/utils.py --roles 2 --inline
 
 ## While it runs
-- Click into any teammate pane to talk to it directly or redirect it.
+- Click into any teammate pane to talk to it directly or redirect it. An idle
+  teammate is a tab in your pane rather than a pane of its own — click its tab, or
+  ask the lead to put it back on screen.
 - Teammate permission prompts appear in *their* pane — approve them there.
-- A folder you've never opened with Claude shows a trust prompt in each pane first.
+- Build-run worktrees are pre-trusted, so they no longer prompt. A folder you have
+  never opened with Claude can still show a trust prompt the first time.
 - `.team/runs/<date>-<team>/tasks.md` tracks each role's status.
 - Say "shut down the team" to close all teammate panes/tabs (the run record stays;
   clean worktrees are removed, branches and PRs stay).
@@ -112,7 +116,8 @@ side's best evidence) · Dropped (refuted) · Next steps.
 - Teammates start in auto permission mode (set TEAM_PERMISSION_MODE to
   override). Haiku falls back to manual, so it will prompt more.
 - Cost: every teammate is a full Claude session with its own context window,
-  so cost scales with team size. Prefer 2–3 sharp roles; use `--model sonnet` for broad sweeps.
+  so cost scales with team size. Prefer 2–3 sharp roles; the lead already fits a model
+  to each role, so reach for `--model` only to force one model everywhere.
 - Give roles separate files when the task edits code.
 - This emulates Claude Code's experimental agent teams for setups where they're
   unavailable (e.g. disabled by managed settings); the lead relays challenge
