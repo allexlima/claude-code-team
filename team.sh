@@ -91,11 +91,11 @@ if [ "$sub" = close ]; then
   exit 0
 fi
 
-# Available models. The option list is org-managed (managed-settings.json) and
-# changes without notice, so read it at run time instead of hardcoding names.
-# `behavesAs` is the capability tier a model is gated at, which is what decides
-# whether it is a sensible fit for a role -- not the vendor name.
-if [ "$sub" = models ]; then
+# Models available here. The option list is org-managed (managed-settings.json) and
+# changes without notice, so it is read at run time instead of hardcoded. Emits
+# "<label>TAB<id>TAB<tier>", best tier first. `behavesAs` is the capability tier a
+# model is gated at, which is what decides whether it fits a role.
+_team_models() {
   python3 - <<'PY'
 import json, os, re
 options = None
@@ -124,11 +124,19 @@ else:
 
 order = {"opus": 0, "sonnet": 1, "haiku": 2, "?": 3}
 rows.sort(key=lambda r: order.get(r[2], 3))
-wl = max(len(r[0]) for r in rows)
-wm = max(len(r[1]) for r in rows)
-for label, mid, tier in rows:
-    print(f"{label.ljust(wl)}  {mid.ljust(wm)}  [{tier}]")
+for r in rows:
+    print("\t".join(r))
 PY
+}
+
+if [ "$sub" = models ]; then
+  _team_models | awk -F'\t' '
+    {l[NR]=$1; m[NR]=$2; t[NR]=$3
+     if (length($1)>a) a=length($1); if (length($2)>b) b=length($2)}
+    END {for (i=1;i<=NR;i++) {
+           s=l[i]; while (length(s)<a) s=s" "
+           u=m[i]; while (length(u)<b) u=u" "
+           print s"  "u"  ["t[i]"]"}}'
   exit 0
 fi
 
@@ -154,16 +162,16 @@ if [ "$sub" = park ] || [ "$sub" = show ] || [ "$sub" = list ]; then
   [ -n "$leadpane" ] || { echo "could not resolve this session's pane — run park/show from the lead's pane"; exit 3; }
 
   if [ "$sub" = list ]; then
-    while read -r b ref lay name; do
+    while read -r b ref lay name mdl; do
       [ -n "$ref" ] || continue
-      if [ "$b" != cmux ]; then echo "${name:-?}  $b $ref"; continue; fi
+      if [ "$b" != cmux ]; then echo "${name:-?}  $b $ref  model=${mdl:--}"; continue; fi
       pp=$(_pane_of "$ref")
       case "$pp" in
         gone) st="closed" ;;
         "$leadpane") st="parked (tab, still running)" ;;
         *) st="working ($pp)" ;;
       esac
-      echo "${name:-?}  $st"
+      echo "${name:-?}  $st  model=${mdl:--}"
     done < "$reg"
     exit 0
   fi
@@ -202,6 +210,24 @@ while :; do case ${1:-} in
   --no-caveman) caveman=; shift ;; *) break ;;
 esac; done
 team=$1 role=$2 pfile=$3 model=${4:-}
+
+# A wrong model does not fail the spawn: claude exits 0, the pane opens, and the
+# session is dead on arrival -- easy to miss entirely once the teammate is parked
+# into a tab. So reject an unknown model here, before any worktree or pane exists.
+if [ -n "$model" ]; then
+  model_ok=
+  case "$model" in opus|sonnet|haiku) model_ok=1 ;; esac
+  if [ -z "$model_ok" ] && _team_models | awk -F'\t' -v m="$model" '$2==m{f=1} END{exit !f}'; then model_ok=1; fi
+  if [ -z "$model_ok" ]; then
+    echo "unknown model: $model" >&2
+    echo "available (alias opus|sonnet|haiku also accepted):" >&2
+    _team_models | awk -F'\t' '{print "  "$2"  ["$3"]"}' >&2
+    exit 3
+  fi
+else
+  echo "warn: no model picked for $team-$role — it inherits the lead's model." >&2
+  echo "      Fit one per role instead: team.sh models" >&2
+fi
 reg="/tmp/team-$team.tabs"
 
 dir=$PWD
@@ -262,13 +288,13 @@ if [ "$backend" = auto ] && [ -n "${CMUX_WORKSPACE_ID:-}" ] && command -v cmux >
   fi
   ref=$(awk '{print $2}' <<<"$out")   # "OK surface:N ..."
   cmux rename-tab --surface "$ref" "$title" >/dev/null
-  echo "cmux $ref $layout $title" >> "$reg"
+  echo "cmux $ref $layout $title ${model:--}" >> "$reg"
   echo "cmux $layout $ref ($team-$role) in current workspace"
 elif [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ]; then
   id=$(tmux split-window -t "$TMUX_PANE" -d -P -F '#{pane_id}' "$cmd")
   tmux select-pane -t "$id" -T "$title"; tmux set -w -t "$id" pane-border-status top
   tmux select-layout -t "$TMUX_PANE" tiled >/dev/null
-  echo "tmux $id pane $title" >> "$reg"
+  echo "tmux $id pane $title ${model:--}" >> "$reg"
   echo "tmux pane $id ($team-$role) in current window"
 else
   s="team-$team"
@@ -279,6 +305,6 @@ else
   fi
   tmux select-pane -t "$id" -T "$title"; tmux set -w -t "$id" pane-border-status top
   tmux select-layout -t "=$s" tiled >/dev/null
-  echo "tmux $id pane $title" >> "$reg"
+  echo "tmux $id pane $title ${model:--}" >> "$reg"
   echo "tmux pane $id ($team-$role) in session $s — attach: tmux attach -t $s"
 fi

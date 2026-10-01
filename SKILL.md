@@ -31,15 +31,15 @@ Pick a short team slug (e.g. `rev1`) and run `bash ~/.claude/skills/team/team.sh
   - `opus` — the adversarial role, and anything needing sustained multi-step judgment: architecture, security, subtle debugging, conflicting evidence.
   - `sonnet` — the default for ordinary roles: implementation, review, tests, docs.
   - `haiku` (and anything that *behaves as* it, e.g. GLM / Kimi) — only mechanical breadth: inventories, grep sweeps, running a test or lint command. **These lose auto permission mode and prompt in their own pane**, so never give one a role that has to run unattended.
-  Spend the top tier where being wrong is expensive, not uniformly. If the user passed `--model`, it wins for every role.
+  Spend the top tier where being wrong is expensive, not uniformly. If the user passed `--model`, it wins for every role. **Always pass a model** — `spawn` refuses one it does not recognise (a bad model does not fail the spawn: the pane opens on a dead session, which is invisible once that teammate is parked) and warns if you leave it off, and `team.sh list` shows what each teammate is actually running.
 - Save each new approved role to `.team/roles/<role>.md` (lens, typical scope, constraints, preferred model) so later runs can reuse it. Don't overwrite an existing spec unless the user asks.
-- Write `<run>/tasks.md`: one line per role (`- [ ] <team>-<role>: <scope> — owns: <files or "read-only">`).
+- Write `<run>/tasks.md`: one line per role (`- [ ] <team>-<role>: <scope> — owns: <files or "read-only"> — model: <model>`), so the run record shows what each role ran on.
 - Run ListAgents once and note this session's own name (the "This session is …" line) — that is `<lead>`.
 - Show the roster in one short table, including each role's model and why that tier; spawning waits for the step-1 approval in every run. **Build run with gate:** the roster must say that each teammate will push `team/<team>-<role>` and open a PR, and you must **wait for the user's OK** before spawning (it publishes to the remote). Then run `bash ~/.claude/skills/team/team.sh gate-init` once from the repo: it sets up the no-mistakes gate (adds a local `no-mistakes` git remote). Exit code 3 = gate unavailable (not installed or no `origin`) — tell the user and continue as a build run without the gate.
 
 ## 3. Spawn (one pane per role)
 For each role, write its prompt to `<run>/prompts/<role>.md`, then run from the working directory:
-`bash ~/.claude/skills/team/team.sh spawn [--tmux] [--tabs] [--worktree] [--no-caveman] <team> <role> <run>/prompts/<role>.md [model]`
+`bash ~/.claude/skills/team/team.sh spawn [--tmux] [--tabs] [--worktree] [--no-caveman] <team> <role> <run>/prompts/<role>.md <model>`
 (`--worktree` for every build-run teammate; `--tmux` / `--tabs` / `--no-caveman` only if the user gave them). Teammates start in auto permission mode, with a fixed pane/tab title, with `teammate-rules.md` appended to their system prompt (split independent work across subagents in one message; verify what comes back), and with the caveman terse-output style unless `--no-caveman`. Those two are concatenated into one appended file because `claude` keeps only the last `--append-system-prompt-file`. The script prints where the pane/tab opened; relay that (for a detached tmux session, the user runs `tmux attach -t team-<team>`).
 
 Each prompt must be self-contained (teammates don't see this conversation) and include: goal, lens (from the role spec if reused), files owned / readable, constraints, the roster (all `<team>-<role>` names), and these instructions:

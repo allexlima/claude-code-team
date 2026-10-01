@@ -47,7 +47,9 @@ architecture / security / subtle debugging, the middle tier for ordinary work,
 and the cheap tier only for mechanical sweeps. Cheap-tier teammates lose auto
 permission mode and will prompt in their pane, so they are not used for roles
 meant to run unattended. The roster you approve shows each role's model, so you
-can change any of them before spawning. `--model` forces one model everywhere.
+can change any of them before spawning, and the run record notes what each role ran
+on. An unrecognised model is refused up front rather than opening a pane on a dead
+session. `--model` forces one model everywhere.
 
 ## Run types
     Review run   Read-only task, or not a git repo. Teammates share the working tree;
