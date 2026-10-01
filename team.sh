@@ -157,8 +157,18 @@ if [ "$sub" = park ] || [ "$sub" = show ] || [ "$sub" = list ]; then
       | python3 -c 'import json,sys; c=json.load(sys.stdin).get("caller") or {}; print(c.get("pane_ref") or "gone")' 2>/dev/null \
       || echo gone
   }
-  leadpane=$(cmux identify 2>/dev/null \
-    | python3 -c 'import json,sys; c=json.load(sys.stdin).get("caller") or {}; print(c.get("pane_ref") or "")' 2>/dev/null || echo "")
+  _lead=$(cmux identify 2>/dev/null \
+    | python3 -c 'import json,sys; c=json.load(sys.stdin).get("caller") or {}; print(c.get("pane_ref") or "", c.get("surface_ref") or "")' 2>/dev/null || echo "")
+  leadpane=${_lead%% *}; leadsurface=${_lead##* }
+  # Both park and show end up moving cmux's focus onto the teammate: a surface
+  # moved into a pane becomes that pane's front tab even with --focus false, and a
+  # freshly split pane takes focus too. Either way the user gets yanked off the
+  # lead. Naming the lead's own surface beats focus-pane, which would restore
+  # whatever tab that pane last remembered -- possibly another parked teammate.
+  _focus_lead() {
+    [ -n "$leadsurface" ] || return 0
+    cmux move-surface --surface "$leadsurface" --pane "$leadpane" --focus true >/dev/null 2>&1 || true
+  }
   [ -n "$leadpane" ] || { echo "could not resolve this session's pane — run park/show from the lead's pane"; exit 3; }
 
   if [ "$sub" = list ]; then
@@ -183,6 +193,7 @@ if [ "$sub" = park ] || [ "$sub" = show ] || [ "$sub" = list ]; then
   if [ "$sub" = park ]; then
     [ "$(_pane_of "$ref")" = "$leadpane" ] && { echo "$title already parked"; exit 0; }
     cmux move-surface --surface "$ref" --pane "$leadpane" --focus false >/dev/null
+    _focus_lead
     echo "parked $title (now a tab in your pane; session still running)"
   else
     cur=$(_pane_of "$ref")
@@ -199,6 +210,7 @@ if [ "$sub" = park ] || [ "$sub" = show ] || [ "$sub" = list ]; then
     else ph=$(cmux new-split right --surface "$CMUX_SURFACE_ID" --focus false | awk '{print $2}'); fi
     cmux move-surface --surface "$ref" --pane "$(_pane_of "$ph")" --focus false >/dev/null
     cmux close-surface --surface "$ph" >/dev/null 2>&1 || true
+    _focus_lead
     echo "showing $title"
   fi
   exit 0
