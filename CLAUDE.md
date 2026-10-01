@@ -29,5 +29,8 @@ quote it word-for-word — they never restate it in their own words.
    documented in the `team.sh` header, and confirms every `--flag` in
    `SKILL.md`'s argument-hint is explained in `HELP.md`. Fix what it reports.
 
-Deterministic checks belong in a hook, not prose: `doccheck` is that check, and
-wiring it into a pre-commit hook is the intended next step.
+Deterministic checks belong in a hook, not prose. `.githooks/pre-commit` runs
+`doccheck`; enable it with `git config core.hooksPath .githooks`. Where a global
+`core.hooksPath` is already set (e.g. a Databricks secret-scanning hook —
+`git config --get core.hooksPath`), don't override it: run `bash team.sh doccheck`
+in CI or as a manual pre-push check so you keep the global hook.

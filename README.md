@@ -62,7 +62,7 @@ Name roles yourself if you like — `Roles: security: auth + tokens, perf: DB qu
 |---|---|
 | `--roles N` | Number of teammates (default 3) |
 | `--rounds N` | Challenge rounds after the first reports (default 1) |
-| `--model M` | Teammate model (default: the lead's) |
+| `--model M` | Force one model for all roles (default: the lead fits one per role) |
 | `--autoroles` | Propose roles from the project; waits for your OK |
 | `--tabs` | One cmux tab per teammate instead of split panes |
 | `--tmux` | Force tmux even inside cmux |
