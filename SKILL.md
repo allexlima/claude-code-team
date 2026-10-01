@@ -40,7 +40,7 @@ Pick a short team slug (e.g. `rev1`) and run `bash ~/.claude/skills/team/team.sh
 ## 3. Spawn (one pane per role)
 For each role, write its prompt to `<run>/prompts/<role>.md`, then run from the working directory:
 `bash ~/.claude/skills/team/team.sh spawn [--tmux] [--tabs] [--worktree] [--no-caveman] <team> <role> <run>/prompts/<role>.md [model]`
-(`--worktree` for every build-run teammate; `--tmux` / `--tabs` / `--no-caveman` only if the user gave them). Teammates start in auto permission mode, with a fixed pane/tab title, and with the caveman terse-output style unless `--no-caveman`. The script prints where the pane/tab opened; relay that (for a detached tmux session, the user runs `tmux attach -t team-<team>`).
+(`--worktree` for every build-run teammate; `--tmux` / `--tabs` / `--no-caveman` only if the user gave them). Teammates start in auto permission mode, with a fixed pane/tab title, with `teammate-rules.md` appended to their system prompt (split independent work across subagents in one message; verify what comes back), and with the caveman terse-output style unless `--no-caveman`. Those two are concatenated into one appended file because `claude` keeps only the last `--append-system-prompt-file`. The script prints where the pane/tab opened; relay that (for a detached tmux session, the user runs `tmux attach -t team-<team>`).
 
 Each prompt must be self-contained (teammates don't see this conversation) and include: goal, lens (from the role spec if reused), files owned / readable, constraints, the roster (all `<team>-<role>` names), and these instructions:
 - "You are `<team>-<role>` on a team led by `<lead>`. You may message teammates directly with SendMessage (use ListAgents if a name doesn't resolve)."
@@ -53,6 +53,7 @@ FINDINGS: numbered, each with evidence (file:line, command output, or source)
 CONFIDENCE: high/medium/low per finding
 STALE FACTS: facts.md entries contradicted, with evidence (or "none")
 OPEN QUESTIONS: what you couldn't verify
+PARALLELISM: how many subagents you dispatched and for what (or why the work was not splittable)
 ```
 After spawning, run ListAgents to confirm every teammate appears (retry briefly; sessions take a few seconds to start). If one doesn't, read its screen (`cmux read-screen --surface <ref> --lines 30` or `tmux capture-pane -p -t <pane-id>`; ids are in `/tmp/team-<team>.tabs`) to see why — e.g. a trust or permission prompt the user must answer in that pane — and tell the user.
 

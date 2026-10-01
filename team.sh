@@ -14,7 +14,8 @@
 # Each new worktree is pre-accepted in ~/.claude.json so the workspace-trust prompt
 # does not appear in every pane (a worktree is its own git top-level, so it cannot inherit it).
 # Every pane/tab is titled <team>-<role> (Claude's own terminal-title updates are disabled so it sticks).
-# Teammates get the caveman output style (~/.agents/skills/caveman/SKILL.md) unless --no-caveman.
+# Every teammate gets teammate-rules.md appended to its system prompt (parallelise with
+# subagents, verify what they return), plus the caveman output style unless --no-caveman.
 # Backend: a cmux tab in the lead's workspace when running inside cmux, else a tmux pane
 # (splits the lead's window inside tmux, otherwise a detached session "team-<team>").
 # cmux default: split the lead's tab — first teammate to the right, the rest stacked below it.
@@ -230,8 +231,16 @@ PY
 fi
 title="$team-$role"
 cavefile="$HOME/.agents/skills/caveman/SKILL.md"
+rulesfile="$(cd "$(dirname "$0")" && pwd)/teammate-rules.md"
+# claude keeps only the LAST --append-system-prompt-file, so these are concatenated
+# rather than passed as two flags: the always-on teammate rules (parallelise with
+# subagents, verify what they return) plus the caveman style unless --no-caveman.
+sysprompt="/tmp/team-$team-$role.sysprompt.md"
+: > "$sysprompt"
+if [ -f "$rulesfile" ]; then cat "$rulesfile" >> "$sysprompt"; fi
+if [ -n "$caveman" ] && [ -f "$cavefile" ]; then printf '\n\n' >> "$sysprompt"; cat "$cavefile" >> "$sysprompt"; fi
 cmd="cd $(printf %q "$dir") && CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1 claude -n $(printf %q "$title") --permission-mode $(printf %q "${TEAM_PERMISSION_MODE:-auto}")"
-if [ -n "$caveman" ] && [ -f "$cavefile" ]; then cmd+=" --append-system-prompt-file $(printf %q "$cavefile")"; fi
+if [ -s "$sysprompt" ]; then cmd+=" --append-system-prompt-file $(printf %q "$sysprompt")"; fi
 [ -n "$model" ] && cmd+=" --model $(printf %q "$model")"
 cmd+=" \"\$(cat $(printf %q "$pfile"))\""
 

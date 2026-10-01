@@ -68,7 +68,9 @@ can change any of them before spawning. `--model` forces one model everywhere.
   killed, and you can watch any teammate again on request. (Panes + cmux only.)
 - Pane/tab title is fixed to <team>-<role> (Claude's auto-titling is disabled).
 - Starts in auto permission mode (TEAM_PERMISSION_MODE overrides; Haiku → manual).
-- Uses parallel subagents for independent sub-tasks.
+- Splits its own work across subagents: anything independent (separate files, checks or
+  drafts) is dispatched in one message so it runs concurrently, and its report says what
+  it parallelised. It still verifies what the subagents hand back before reporting it.
 - Writes in caveman style (https://github.com/JuliusBrussee/caveman) to save tokens;
   code, paths and errors unchanged. The lead's summary to you stays normal prose.
 
