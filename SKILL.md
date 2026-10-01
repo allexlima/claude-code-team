@@ -1,7 +1,7 @@
 ---
 name: team
 description: Emulate Claude Code agent teams — one interactive claude session per role in its own cmux/tmux pane (or tab), a shared task file, cross-session messaging for challenge rounds, and a git-ignored .team/ folder with reusable roles, run records, and a verified-facts ledger. Use when the user runs /team or asks for a "team", "debate", or multiple agents that challenge each other's findings.
-argument-hint: "<task> [--roles N] [--rounds N] [--model sonnet|opus|haiku] [--autoroles] [--tabs] [--tmux] [--no-gate] [--no-caveman] [--autoclose] [--inline] [--help]"
+argument-hint: "<task> [--roles N] [--rounds N] [--model <alias|id>] [--autoroles] [--tabs] [--tmux] [--no-gate] [--no-caveman] [--autoclose] [--inline] [--help]"
 ---
 
 # /team — agent team emulation
@@ -27,10 +27,15 @@ Pick a short team slug (e.g. `rev1`) and run `bash ~/.claude/skills/team/team.sh
 - Otherwise, with `--autoroles`, do a quick, cheap scan (a few commands, no deep reads; never print secrets or data files): CLAUDE.md / README, top-level layout and languages, test and CI setup, `git status` / `git diff --stat` / recent `git log` if it's a repo, and stack markers (`databricks.yml`, notebooks, `pyproject.toml`, `package.json`, Dockerfiles). **Prefer existing `.team/roles/` specs** that fit; invent new roles only for uncovered lenses (e.g. diff spanning `src/api` + `src/ui` → `backend` + `frontend`; bundle + notebooks → `dabs-config` + `pipeline-logic`; missing tests → `tests`). Show the roster as a table (role · lens · owns · one-line *why* citing the file/signal, marking reused vs new) and **wait for the user's OK or edits before spawning**.
 - Without either, pick N roles (3–5) from the task text.
 - Each role: kebab-case name, one lens, and — if the task edits code — an **exclusive set of files**. Never let two roles edit the same file. Research/review/debug: include one adversarial role.
+- **Pick a model per role.** Run `bash ~/.claude/skills/team/team.sh models` — the list is org-managed and changes, so read it instead of assuming which models exist. Match the *tier* in brackets to what the role actually demands, and pass the model id as the last argument to `spawn`:
+  - `opus` — the adversarial role, and anything needing sustained multi-step judgment: architecture, security, subtle debugging, conflicting evidence.
+  - `sonnet` — the default for ordinary roles: implementation, review, tests, docs.
+  - `haiku` (and anything that *behaves as* it, e.g. GLM / Kimi) — only mechanical breadth: inventories, grep sweeps, running a test or lint command. **These lose auto permission mode and prompt in their own pane**, so never give one a role that has to run unattended.
+  Spend the top tier where being wrong is expensive, not uniformly. If the user passed `--model`, it wins for every role.
 - Save each new approved role to `.team/roles/<role>.md` (lens, typical scope, constraints, preferred model) so later runs can reuse it. Don't overwrite an existing spec unless the user asks.
 - Write `<run>/tasks.md`: one line per role (`- [ ] <team>-<role>: <scope> — owns: <files or "read-only">`).
 - Run ListAgents once and note this session's own name (the "This session is …" line) — that is `<lead>`.
-- Show the roster in one short table; spawning waits for the step-1 approval in every run. **Build run with gate:** the roster must say that each teammate will push `team/<team>-<role>` and open a PR, and you must **wait for the user's OK** before spawning (it publishes to the remote). Then run `bash ~/.claude/skills/team/team.sh gate-init` once from the repo: it sets up the no-mistakes gate (adds a local `no-mistakes` git remote). Exit code 3 = gate unavailable (not installed or no `origin`) — tell the user and continue as a build run without the gate.
+- Show the roster in one short table, including each role's model and why that tier; spawning waits for the step-1 approval in every run. **Build run with gate:** the roster must say that each teammate will push `team/<team>-<role>` and open a PR, and you must **wait for the user's OK** before spawning (it publishes to the remote). Then run `bash ~/.claude/skills/team/team.sh gate-init` once from the repo: it sets up the no-mistakes gate (adds a local `no-mistakes` git remote). Exit code 3 = gate unavailable (not installed or no `origin`) — tell the user and continue as a build run without the gate.
 
 ## 3. Spawn (one pane per role)
 For each role, write its prompt to `<run>/prompts/<role>.md`, then run from the working directory:

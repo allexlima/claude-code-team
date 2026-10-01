@@ -8,6 +8,7 @@
 #   team.sh park <team> <role>  -> fold an idle teammate's pane into a tab (keeps it running)
 #   team.sh show <team> <role>  -> bring a parked teammate back into its own pane
 #   team.sh list <team>         -> each teammate: working / parked / closed
+#   team.sh models              -> models available here, best tier first
 # --worktree: the teammate works in its own git worktree .team/worktrees/<team>-<role>
 # on a new branch team/<team>-<role> (from the current HEAD), like a separate person.
 # Each new worktree is pre-accepted in ~/.claude.json so the workspace-trust prompt
@@ -86,6 +87,47 @@ if [ "$sub" = close ]; then
     echo "closed $backend $id"
   done < "$reg"
   rm -f "$reg"
+  exit 0
+fi
+
+# Available models. The option list is org-managed (managed-settings.json) and
+# changes without notice, so read it at run time instead of hardcoding names.
+# `behavesAs` is the capability tier a model is gated at, which is what decides
+# whether it is a sensible fit for a role -- not the vendor name.
+if [ "$sub" = models ]; then
+  python3 - <<'PY'
+import json, os, re
+options = None
+for path in ("/Library/Application Support/ClaudeCode/managed-settings.json",
+             os.path.expanduser("~/.claude/settings.json")):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            picker = json.load(fh).get("modelPicker") or {}
+    except Exception:
+        continue
+    if picker.get("options"):
+        options = picker["options"]
+        break
+
+rows = []
+if options:
+    for o in options:
+        mid = o.get("model") or ""
+        if not mid:
+            continue
+        hit = re.search(r"opus|sonnet|haiku", o.get("behavesAs") or mid)
+        rows.append((o.get("label") or mid, mid, hit.group(0) if hit else "?"))
+else:
+    # No managed picker: the built-in aliases are all that can be relied on.
+    rows = [("Opus", "opus", "opus"), ("Sonnet", "sonnet", "sonnet"), ("Haiku", "haiku", "haiku")]
+
+order = {"opus": 0, "sonnet": 1, "haiku": 2, "?": 3}
+rows.sort(key=lambda r: order.get(r[2], 3))
+wl = max(len(r[0]) for r in rows)
+wm = max(len(r[1]) for r in rows)
+for label, mid, tier in rows:
+    print(f"{label.ljust(wl)}  {mid.ljust(wm)}  [{tier}]")
+PY
   exit 0
 fi
 

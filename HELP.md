@@ -13,7 +13,8 @@ and writes the final synthesis.
     --rounds N       Challenge rounds after the first reports (default 1)
     --autoroles      Scan the project (README, layout, tests, git diff, stack) and propose
                      roles from it; waits for your OK before spawning
-    --model M        Teammate model: sonnet | opus | haiku (default: lead's model)
+    --model M        Force one model for every teammate (alias or full id).
+                     Default: the lead picks a model per role (see Choosing models)
     --tabs           One cmux tab per teammate instead of panes
     --tmux           Force tmux even inside cmux
     --no-gate        Build runs: skip no-mistakes (commits stay local, no push/PR)
@@ -37,6 +38,16 @@ otherwise gets paid once per teammate.
 - Otherwise the lead picks roles from the task text alone.
 - Best practice: one distinct lens per role, one adversarial role, separate
   files per role when editing, 2–3 roles.
+
+## Choosing models
+The lead lists what this machine actually offers (`team.sh models` — the set is
+org-managed, so it is read at run time, not hardcoded) and gives each role the
+cheapest tier that still fits it: the top tier for the adversarial role and for
+architecture / security / subtle debugging, the middle tier for ordinary work,
+and the cheap tier only for mechanical sweeps. Cheap-tier teammates lose auto
+permission mode and will prompt in their pane, so they are not used for roles
+meant to run unattended. The roster you approve shows each role's model, so you
+can change any of them before spawning. `--model` forces one model everywhere.
 
 ## Run types
     Review run   Read-only task, or not a git repo. Teammates share the working tree;
