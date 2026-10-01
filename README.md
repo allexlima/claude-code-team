@@ -17,6 +17,7 @@ It emulates Claude Code's experimental [agent teams](https://code.claude.com/doc
 ## Features
 
 - **One pane per teammate**, titled `<team>-<role>` so you can click in and talk to any of them directly.
+- **Questions centralized in the lead** — a teammate that needs your input forwards it to the lead, which asks you (with options) in one place and relays your answer back, so you answer everything in the lead pane instead of hunting across panes.
 - **Challenge rounds** — each teammate gets the others' findings and must AGREE / DISPUTE / REFINE with evidence. Output: *Consensus · Disputed · Dropped · Next steps*.
 - **Build runs work like a real team** — in a git repo, each teammate gets its own worktree and branch, commits its own work, and gates it through [no-mistakes](https://github.com/kunchenguid/no-mistakes) (review → test → lint → push → PR). One PR per teammate.
 - **`--autoroles`** — derives roles from your project (README, layout, tests, git diff, stack) and asks you to confirm.

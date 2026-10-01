@@ -111,7 +111,10 @@ there yet.
 - Click into any teammate pane to talk to it directly or redirect it. An idle
   teammate is a tab in your pane rather than a pane of its own — click its tab, or
   ask the lead to put it back on screen.
-- Teammate permission prompts appear in *their* pane — approve them there.
+- Teammate *tool-permission* prompts appear in *their* pane — approve them there.
+- A teammate that needs your input or a decision forwards the question to the lead; you
+  answer it in the lead pane (with options) and the lead relays it back — so you don't
+  have to visit each pane.
 - Build-run worktrees are pre-trusted, so they no longer prompt. A folder you have
   never opened with Claude can still show a trust prompt the first time.
 - `.team/runs/<date>-<team>/tasks.md` tracks each role's status.

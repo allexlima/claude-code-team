@@ -77,7 +77,8 @@ Park each teammate once its work is done (`team.sh park <team> <role>`): the wor
 - Don't do teammates' work yourself; wait for their messages. If one stalls, message it; if it died, respawn with the same name.
 - A parked teammate is only a tab away, but its prompts are off-screen: if one goes quiet, `team.sh show <team> <role>` so the user can see whatever is waiting in it.
 - Every claim in the synthesis and facts.md must trace to a teammate's evidence.
-- Teammate permission prompts appear in *their* panes — tell the user to approve there. Never relay approvals between sessions.
+- Teammate *tool-permission* prompts (the CLI's approve-this-command modals) appear in *their* panes — tell the user to approve there; never relay approvals between sessions. (Agent *questions* are different — they are forwarded to you; see the next rule.)
+- **Relay teammate questions to the user.** A teammate message whose first line is `NEEDS INPUT` is a question, not a report: present it to the user with AskUserQuestion, naming the asking teammate in the question text (the header is too short for the full `<team>-<role>` name). Batch up to 4 pending questions into one AskUserQuestion. Then SendMessage the chosen answer back to that teammate. Relay without un-parking it — the Q&A happens in your pane, which is the whole point (the deliberate exception to showing a teammate before you send it work). This keeps all input in one place instead of scattered across panes.
 - Haiku teammates fall back to manual permission mode (auto mode isn't available on Haiku), so they'll prompt in their panes — warn the user if they pick `--model haiku`.
 - Keep your own synthesis to the user in normal prose (caveman style is for teammates only).
 - Cost: each teammate is a full session. Prefer fewer, sharper roles; suggest `--model sonnet` for broad sweeps.
