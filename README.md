@@ -5,13 +5,11 @@ A [Claude Code](https://code.claude.com) skill that runs a **team of Claude sess
 It emulates Claude Code's experimental [agent teams](https://code.claude.com/docs/en/agent-teams) using only standard features (interactive sessions, cross-session messaging, subagents), so it works even where native agent teams are disabled.
 
 ```
-┌──────────────────────────┬──────────────────────┐
-│                          │ rev1-security        │
-│   you + the lead         ├──────────────────────┤
-│   (plans, relays,        │ rev1-perf            │
-│    synthesizes)          ├──────────────────────┤
-│                          │ rev1-skeptic         │
-└──────────────────────────┴──────────────────────┘
+┌──────────────────────┬───────────────┬───────────────┐
+│  you + the lead      │ rev1-security │ rev1-perf     │
+│  (plans · relays ·   ├───────────────┼───────────────┤
+│   synthesizes)       │ rev1-tests    │ rev1-skeptic  │
+└──────────────────────┴───────────────┴───────────────┘
 ```
 
 ## Features
@@ -31,6 +29,8 @@ git clone https://github.com/allexlima/claude-code-team ~/.claude/skills/team
 ```
 
 That's it — start (or restart) Claude Code and run `/team --help`.
+
+**Try it:** `/team review my current changes --autoroles` — the lead proposes roles from your repo, you approve, and the team runs.
 
 **Update:** `git -C ~/.claude/skills/team pull` · **Uninstall:** `rm -rf ~/.claude/skills/team`
 
@@ -93,7 +93,7 @@ When you're done, say **"shut down the team"**.
 ## Good to know
 
 - **Cost scales with team size** — every teammate is a full Claude session. 2–3 sharp roles beat 5 vague ones.
-- **Permission prompts appear in each teammate's own pane.** Haiku doesn't support auto mode, so Haiku teammates prompt more.
+- **Tool-permission prompts appear in each teammate's own pane** — teammate *questions*, by contrast, are routed to the lead. Haiku-tier models (including behaves-as-Haiku ones like GLM/Kimi) fall back to prompting mode rather than auto, so don't use them for roles meant to run unattended.
 - **First time in a folder**, each pane shows Claude's workspace-trust prompt (folders inside a trusted project are already trusted).
 - **Build runs publish** (push + PR per teammate); the lead always asks before spawning them.
 - Tested on macOS with cmux and tmux.
