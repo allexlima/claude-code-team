@@ -51,16 +51,23 @@ OPEN QUESTIONS: what you couldn't verify
 ```
 After spawning, run ListAgents to confirm every teammate appears (retry briefly; sessions take a few seconds to start). If one doesn't, read its screen (`cmux read-screen --surface <ref> --lines 30` or `tmux capture-pane -p -t <pane-id>`; ids are in `/tmp/team-<team>.tabs`) to see why — e.g. a trust or permission prompt the user must answer in that pane — and tell the user.
 
+**Panes are the user's audit view.** Teammates open in a two-column grid to the right of you, so each stays readable instead of getting 1/N of the screen height. Keep that grid to teammates that are *actually working*:
+- When a teammate's report arrives, `bash ~/.claude/skills/team/team.sh park <team> <role>` — its pane folds into a tab in your pane. The session is untouched: still running, still in ListAgents, still messageable, and cmux badges the tab if it needs input.
+- Before you send a teammate work again, `... show <team> <role>` first, so the user can watch it while it works.
+- `... list <team>` prints each teammate as working / parked / closed — use it to reconcile instead of guessing.
+Parking needs the cmux backend and panes; with `--tabs` or tmux there is nothing to fold, and the commands say so.
+
 ## 4. Challenge rounds (default 1)
-When all reports are in, SendMessage each teammate the *other* teammates' findings, labeled by name: "Try to disprove or refine these using evidence — message the author directly if useful. Then append your AGREE / DISPUTE (with evidence) / REFINE per finding and revised list to your report file, and send it to me." Send all before waiting. Relay faithfully — never present your own claims as a teammate's.
+When all reports are in, SendMessage each teammate the *other* teammates' findings, labeled by name: "Try to disprove or refine these using evidence — message the author directly if useful. Then append your AGREE / DISPUTE (with evidence) / REFINE per finding and revised list to your report file, and send it to me." `show` each teammate you are about to message so the user can watch the round, then send all before waiting. Relay faithfully — never present your own claims as a teammate's.
 
 ## 5. Synthesize and record
 Report: build runs first list each teammate's branch, gate outcome, and PR URL, and flag any teammates whose branches touch the same files (merge-conflict risk). Then **Consensus** (survived challenge, with evidence) · **Disputed** (each side's best evidence) · **Dropped** (refuted, one line each) · **Next steps**. Save the same text to `<run>/synthesis.md`.
 Update `.team/facts.md`: append **consensus findings only** as one line each (`- <fact> — evidence: <file:line | command> — <YYYY-MM-DD>, run <run dir name>`), and for each confirmed STALE fact, strike it through with a pointer to the contradicting run (don't delete). Never write secrets, PII, raw data, or unverified claims. Tell the user how many facts were added / marked stale.
-Leave panes open so the user can keep talking to teammates — unless `--autoclose` was given, in which case shut the team down right after this step. When the user says the team is done ("shut down the team"), SendMessage each teammate that the team is done, then run `bash ~/.claude/skills/team/team.sh close <team>` (closes every recorded pane/tab; the run record in `.team/` stays). For build runs, also run `bash ~/.claude/skills/team/team.sh clean <team>` — removes worktrees without uncommitted changes (branches and PRs stay); report any it kept.
+Park each teammate once its work is done (`team.sh park <team> <role>`): the workspace ends clean with the whole team still running and messageable, and the user can watch any of them again with `team.sh show <team> <role>`. Unless `--autoclose` was given, in which case shut the team down right after this step. When the user says the team is done ("shut down the team"), SendMessage each teammate that the team is done, then run `bash ~/.claude/skills/team/team.sh close <team>` (closes every recorded pane/tab; the run record in `.team/` stays). For build runs, also run `bash ~/.claude/skills/team/team.sh clean <team>` — removes worktrees without uncommitted changes (branches and PRs stay); report any it kept.
 
 ## Rules
 - Don't do teammates' work yourself; wait for their messages. If one stalls, message it; if it died, respawn with the same name.
+- A parked teammate is only a tab away, but its prompts are off-screen: if one goes quiet, `team.sh show <team> <role>` so the user can see whatever is waiting in it.
 - Every claim in the synthesis and facts.md must trace to a teammate's evidence.
 - Teammate permission prompts appear in *their* panes — tell the user to approve there. Never relay approvals between sessions.
 - Haiku teammates fall back to manual permission mode (auto mode isn't available on Haiku), so they'll prompt in their panes — warn the user if they pick `--model haiku`.

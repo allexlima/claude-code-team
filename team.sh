@@ -5,6 +5,9 @@
 #   team.sh init <team>   -> creates .team/ (idempotent) + a run dir; prints the run dir path
 #   team.sh gate-init     -> sets up the no-mistakes gate for this repo (needs an "origin" remote)
 #   team.sh clean <team>  -> removes the team's worktrees that have no uncommitted changes (branches kept)
+#   team.sh park <team> <role>  -> fold an idle teammate's pane into a tab (keeps it running)
+#   team.sh show <team> <role>  -> bring a parked teammate back into its own pane
+#   team.sh list <team>         -> each teammate: working / parked / closed
 # --worktree: the teammate works in its own git worktree .team/worktrees/<team>-<role>
 # on a new branch team/<team>-<role> (from the current HEAD), like a separate person.
 # Each new worktree is pre-accepted in ~/.claude.json so the workspace-trust prompt
@@ -86,6 +89,70 @@ if [ "$sub" = close ]; then
   exit 0
 fi
 
+# Pane <-> tab lifecycle. A teammate's pane is the user's live audit view, so the
+# grid should hold only teammates that are actually working. Parking moves the
+# teammate's surface into the lead's pane, where it becomes a background tab: the
+# claude process is never touched, so it stays alive, stays in ListAgents, and cmux
+# can badge the tab if it needs input. `show` moves it back out into its own pane.
+if [ "$sub" = park ] || [ "$sub" = show ] || [ "$sub" = list ]; then
+  team=${1:?team}; reg="/tmp/team-$team.tabs"
+  [ -n "${CMUX_WORKSPACE_ID:-}" ] && command -v cmux >/dev/null || {
+    echo "park/show/list need the cmux backend (tmux teammates stay in their panes)"; exit 3; }
+  [ -f "$reg" ] || { echo "no teammates recorded for $team"; exit 3; }
+  # identify still exits 0 for a surface that is gone, returning a null pane_ref,
+  # so treat null/missing as "gone" rather than trusting the exit status.
+  _pane_of() {  # pane ref holding surface $1, or "gone"
+    cmux identify --surface "$1" 2>/dev/null \
+      | python3 -c 'import json,sys; c=json.load(sys.stdin).get("caller") or {}; print(c.get("pane_ref") or "gone")' 2>/dev/null \
+      || echo gone
+  }
+  leadpane=$(cmux identify 2>/dev/null \
+    | python3 -c 'import json,sys; c=json.load(sys.stdin).get("caller") or {}; print(c.get("pane_ref") or "")' 2>/dev/null || echo "")
+  [ -n "$leadpane" ] || { echo "could not resolve this session's pane — run park/show from the lead's pane"; exit 3; }
+
+  if [ "$sub" = list ]; then
+    while read -r b ref lay name; do
+      [ -n "$ref" ] || continue
+      if [ "$b" != cmux ]; then echo "${name:-?}  $b $ref"; continue; fi
+      pp=$(_pane_of "$ref")
+      case "$pp" in
+        gone) st="closed" ;;
+        "$leadpane") st="parked (tab, still running)" ;;
+        *) st="working ($pp)" ;;
+      esac
+      echo "${name:-?}  $st"
+    done < "$reg"
+    exit 0
+  fi
+
+  role=${2:?role}; title="$team-$role"
+  ref=$(awk -v t="$title" '$1=="cmux" && $4==t {r=$2} END{print r}' "$reg")
+  [ -n "$ref" ] || { echo "no recorded pane for $title (spawned with --tabs, or not spawned)"; exit 3; }
+
+  if [ "$sub" = park ]; then
+    [ "$(_pane_of "$ref")" = "$leadpane" ] && { echo "$title already parked"; exit 0; }
+    cmux move-surface --surface "$ref" --pane "$leadpane" --focus false >/dev/null
+    echo "parked $title (now a tab in your pane; session still running)"
+  else
+    cur=$(_pane_of "$ref")
+    [ "$cur" = gone ] && { echo "$title is gone; respawn it"; exit 3; }
+    [ "$cur" != "$leadpane" ] && { echo "$title already showing ($cur)"; exit 0; }
+    # Extend the teammate region rather than shrinking the lead: hang it off whoever
+    # is already working, and only split the lead when no teammate is visible.
+    anchor=""
+    for r in $(awk '$1=="cmux"{print $2}' "$reg"); do
+      pr=$(_pane_of "$r")
+      [ "$pr" != "$leadpane" ] && [ "$pr" != gone ] && anchor="$r"
+    done
+    if [ -n "$anchor" ]; then ph=$(cmux new-split down --surface "$anchor" --focus false | awk '{print $2}')
+    else ph=$(cmux new-split right --surface "$CMUX_SURFACE_ID" --focus false | awk '{print $2}'); fi
+    cmux move-surface --surface "$ref" --pane "$(_pane_of "$ph")" --focus false >/dev/null
+    cmux close-surface --surface "$ph" >/dev/null 2>&1 || true
+    echo "showing $title"
+  fi
+  exit 0
+fi
+
 backend=auto layout=pane worktree= caveman=1
 while :; do case ${1:-} in
   --tmux) backend=tmux; shift ;; --tabs) layout=tab; shift ;; --worktree) worktree=1; shift ;;
@@ -128,21 +195,29 @@ cmd+=" \"\$(cat $(printf %q "$pfile"))\""
 
 if [ "$backend" = auto ] && [ -n "${CMUX_WORKSPACE_ID:-}" ] && command -v cmux >/dev/null; then
   if [ "$layout" = pane ]; then
-    last=$(awk '$3=="pane"{r=$2} END{print r}' "$reg" 2>/dev/null || true)
-    if [ -n "$last" ]; then out=$(cmux new-split down --surface "$last" --command "$cmd" --focus false)
-    else out=$(cmux new-split right --surface "$CMUX_SURFACE_ID" --command "$cmd" --focus false); fi
+    # Two-column grid in the region right of the lead: #1 opens it, #2 sits beside
+    # #1, and every later teammate splits down from the one two slots back. A 1-wide
+    # stack gave each teammate 1/N of the screen height, which got unreadable fast.
+    n=$(awk '$3=="pane"{c++} END{print c+0}' "$reg" 2>/dev/null || echo 0)
+    if [ "$n" -eq 0 ]; then
+      out=$(cmux new-split right --surface "$CMUX_SURFACE_ID" --command "$cmd" --focus false)
+    elif [ "$n" -eq 1 ]; then
+      out=$(cmux new-split right --surface "$(awk '$3=="pane"{print $2; exit}' "$reg")" --command "$cmd" --focus false)
+    else
+      out=$(cmux new-split down --surface "$(awk '$3=="pane"{print $2}' "$reg" | sed -n "$((n-1))p")" --command "$cmd" --focus false)
+    fi
   else
     out=$(cmux new-surface --type terminal --workspace "$CMUX_WORKSPACE_ID" --command "$cmd" --focus false)
   fi
   ref=$(awk '{print $2}' <<<"$out")   # "OK surface:N ..."
   cmux rename-tab --surface "$ref" "$title" >/dev/null
-  echo "cmux $ref $layout" >> "$reg"
+  echo "cmux $ref $layout $title" >> "$reg"
   echo "cmux $layout $ref ($team-$role) in current workspace"
 elif [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ]; then
   id=$(tmux split-window -t "$TMUX_PANE" -d -P -F '#{pane_id}' "$cmd")
   tmux select-pane -t "$id" -T "$title"; tmux set -w -t "$id" pane-border-status top
   tmux select-layout -t "$TMUX_PANE" tiled >/dev/null
-  echo "tmux $id" >> "$reg"
+  echo "tmux $id pane $title" >> "$reg"
   echo "tmux pane $id ($team-$role) in current window"
 else
   s="team-$team"
@@ -153,6 +228,6 @@ else
   fi
   tmux select-pane -t "$id" -T "$title"; tmux set -w -t "$id" pane-border-status top
   tmux select-layout -t "=$s" tiled >/dev/null
-  echo "tmux $id" >> "$reg"
+  echo "tmux $id pane $title" >> "$reg"
   echo "tmux pane $id ($team-$role) in session $s — attach: tmux attach -t $s"
 fi

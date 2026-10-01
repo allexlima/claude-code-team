@@ -51,6 +51,10 @@ otherwise gets paid once per teammate.
     remote; without them the gate is skipped and commits stay local.
 
 ## Every teammate
+- Opens in a two-column grid right of the lead, so panes stay readable as the team grows.
+- Its pane folds into a tab while it is idle and comes back as a pane when it works again,
+  so the grid shows only who is working. The session keeps running either way — nothing is
+  killed, and you can watch any teammate again on request. (Panes + cmux only.)
 - Pane/tab title is fixed to <team>-<role> (Claude's auto-titling is disabled).
 - Starts in auto permission mode (TEAM_PERMISSION_MODE overrides; Haiku → manual).
 - Uses parallel subagents for independent sub-tasks.
