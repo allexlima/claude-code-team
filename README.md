@@ -46,8 +46,7 @@ That's it — start (or restart) Claude Code and run `/team --help`.
 ## Usage
 
 ```
-/team <task> [--roles N] [--rounds N] [--model sonnet|opus|haiku] [--autoroles]
-             [--tabs] [--tmux] [--no-gate] [--no-caveman] [--autoclose] [--inline]
+/team <task> [options]
 ```
 
 ```text
@@ -58,20 +57,7 @@ That's it — start (or restart) Claude Code and run `/team --help`.
 /team research vector search options for our RAG demo --tabs --autoclose
 ```
 
-Name roles yourself if you like — `Roles: security: auth + tokens, perf: DB queries, skeptic: challenge the others`. Saved roles load by name — first from the project (`.team/roles/`), then from your shared library (`~/.claude/team/roles/`). See `/team --help`.
-
-| Option | Effect |
-|---|---|
-| `--roles N` | Number of teammates (default 3) |
-| `--rounds N` | Challenge rounds after the first reports (default 1) |
-| `--model M` | Force one model for all roles (default: the lead fits one per role) |
-| `--autoroles` | Propose roles from the project; waits for your OK |
-| `--tabs` | One cmux tab per teammate instead of split panes |
-| `--tmux` | Force tmux even inside cmux |
-| `--no-gate` | Build runs: skip no-mistakes (no push / PR) |
-| `--no-caveman` | Teammates write normal prose |
-| `--autoclose` | Close the team right after the synthesis |
-| `--inline` | No panes — teammates run as in-session subagents |
+Name roles yourself if you like — `Roles: security: auth + tokens, perf: DB queries, skeptic: challenge the others`. Saved roles load by name — first from the project (`.team/roles/`), then from your shared library (`~/.claude/team/roles/`). Run `/team --help` for the full list of options.
 
 When you're done, say **"shut down the team"**.
 
