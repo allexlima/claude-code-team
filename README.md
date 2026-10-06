@@ -21,6 +21,7 @@ It emulates Claude Code's experimental [agent teams](https://code.claude.com/doc
 - **`--autoroles`** — derives roles from your project (README, layout, tests, git diff, stack) and asks you to confirm.
 - **Project memory in `.team/`** (git-ignored) — project role specs (plus a shared role library in `~/.claude/team/roles/`), a full record of every run, and a `facts.md` ledger of verified findings that future teams read first.
 - **Token-aware** — teammates use parallel subagents and the [caveman](https://github.com/JuliusBrussee/caveman) terse style for agent-to-agent chatter; your summary stays in normal prose.
+- **Optional Ruflo memory bridge** — when `ruflo` is installed and persisting, `mem-sync` indexes facts and lessons for semantic recall across sessions. See `/team --help`.
 
 ## Install
 
@@ -40,13 +41,12 @@ That's it — start (or restart) Claude Code and run `/team --help`.
 |---|---|
 | Required | [Claude Code](https://code.claude.com), and **cmux** or **tmux** for panes (or use `--inline` for no panes) |
 | Build runs | `git`, an `origin` remote, [no-mistakes](https://github.com/kunchenguid/no-mistakes) (optional — without it, commits just stay local) |
-| Optional | [caveman](https://github.com/JuliusBrussee/caveman) installed at `~/.agents/skills/caveman` (skipped if absent) |
+| Optional | [caveman](https://github.com/JuliusBrussee/caveman) installed at `~/.agents/skills/caveman` (skipped if absent) · [ruflo](https://github.com/ruvnet/ruflo) for cross-session memory (`mem-sync` / `mem-recall`; skipped if absent — see `/team --help`) |
 
 ## Usage
 
 ```
-/team <task> [--roles N] [--rounds N] [--model sonnet|opus|haiku] [--autoroles]
-             [--tabs] [--tmux] [--no-gate] [--no-caveman] [--autoclose] [--inline]
+/team <task> [options]
 ```
 
 ```text
@@ -57,20 +57,7 @@ That's it — start (or restart) Claude Code and run `/team --help`.
 /team research vector search options for our RAG demo --tabs --autoclose
 ```
 
-Name roles yourself if you like — `Roles: security: auth + tokens, perf: DB queries, skeptic: challenge the others`. Saved roles load by name — first from the project (`.team/roles/`), then from your shared library (`~/.claude/team/roles/`). See `/team --help`.
-
-| Option | Effect |
-|---|---|
-| `--roles N` | Number of teammates (default 3) |
-| `--rounds N` | Challenge rounds after the first reports (default 1) |
-| `--model M` | Force one model for all roles (default: the lead fits one per role) |
-| `--autoroles` | Propose roles from the project; waits for your OK |
-| `--tabs` | One cmux tab per teammate instead of split panes |
-| `--tmux` | Force tmux even inside cmux |
-| `--no-gate` | Build runs: skip no-mistakes (no push / PR) |
-| `--no-caveman` | Teammates write normal prose |
-| `--autoclose` | Close the team right after the synthesis |
-| `--inline` | No panes — teammates run as in-session subagents |
+Name roles yourself if you like — `Roles: security: auth + tokens, perf: DB queries, skeptic: challenge the others`. Saved roles load by name — first from the project (`.team/roles/`), then from your shared library (`~/.claude/team/roles/`). Run `/team --help` for the full list of options.
 
 When you're done, say **"shut down the team"**.
 
