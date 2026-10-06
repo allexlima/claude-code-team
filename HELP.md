@@ -94,20 +94,19 @@ there yet.
 
 ## Ruflo memory bridge (optional)
 
-When `ruflo` is installed and its memory is persisting, `/team` indexes
-`.team/facts.md` and role `**Lessons:**` sections into a semantic-search database
-so future runs can recall related findings across sessions.
+When `ruflo` is installed and its memory is persisting, `/team` maintains a
+semantic-search index alongside `.team/facts.md`:
 
-- **`mem-recall "<query>"`** (run at step 1, before spawning): returns semantically
-  matched facts and lessons as leads to re-check. Facts are scoped to this project
-  by default; `--all-projects` searches every project's facts. Lessons are always
-  global.
-- **`mem-sync`** (run at step 5, after updating facts and lessons): writes this
-  project's facts and all role lessons to Ruflo memory. Skips automatically if
-  `ruflo` is absent or memory is not persisting. Refuses if secrets or PII are
-  detected (same check as `facts-lint`).
-- **Database:** `${TEAM_MEMORY_DB:-$HOME/.claude/team/memory.db}` — override
-  `TEAM_MEMORY_DB` to isolate a project or share memory across machines.
+- `mem-sync` — rebuilds this project's facts and role Lessons in the memory DB.
+  Skips (exit 0) if `ruflo` is absent or not persisting. Exit 2 if a secret/PII
+  pattern is found — nothing is stored.
+- `mem-recall [--all-projects] [--limit N] "<query>"` — semantic search; prints
+  `<kind><TAB><score><TAB><text>` per hit (kind: `fact`, `lesson`, or
+  `fact:<project-id>` with `--all-projects`; default limit 5). Struck-through facts
+  come back with their `~~markup~~` intact.
+- **`TEAM_MEMORY_DB`** — path to the SQLite database
+  (default `$HOME/.claude/team/memory.db`). Ruflo's working files (ruvector.db,
+  .swarm/, .claude-flow/) land next to this file, not in the project.
 
 Without Ruflo, `/team` behaves exactly as today — `.team/facts.md` stays the
 single source of truth.

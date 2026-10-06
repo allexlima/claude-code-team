@@ -21,7 +21,7 @@ It emulates Claude Code's experimental [agent teams](https://code.claude.com/doc
 - **`--autoroles`** — derives roles from your project (README, layout, tests, git diff, stack) and asks you to confirm.
 - **Project memory in `.team/`** (git-ignored) — project role specs (plus a shared role library in `~/.claude/team/roles/`), a full record of every run, and a `facts.md` ledger of verified findings that future teams read first.
 - **Token-aware** — teammates use parallel subagents and the [caveman](https://github.com/JuliusBrussee/caveman) terse style for agent-to-agent chatter; your summary stays in normal prose.
-- **Optional Ruflo memory bridge** — when `ruflo` is installed, `mem-sync` indexes facts and lessons for semantic recall; `mem-recall` surfaces them at each run start. See `/team --help`.
+- **Optional Ruflo memory bridge** — when `ruflo` is installed and persisting, `mem-sync` indexes facts and lessons for semantic recall across sessions. See `/team --help`.
 
 ## Install
 
