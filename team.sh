@@ -12,10 +12,11 @@
 #   team.sh role <name>         -> print a role spec path (project override, then shared library); exit 3 if none
 #   team.sh roles               -> list roles available here: "<name>  project|user  <path>"
 #   team.sh facts-lint [--pre-append <file>]  -> freshness of .team/facts.md facts (FRESH/CHECK/GONE/NOANCHOR + DUP); --pre-append scans <file> for secrets
-#   team.sh mem-sync            -> optional Ruflo index: rebuild this project's facts + all role Lessons in the memory DB
-#                                  (skips, exit 0, if ruflo is absent or not persisting; exit 2 on a secret/PII hit, nothing stored)
+#   team.sh mem-sync            -> optional Ruflo index: sync this project's facts + all role Lessons into the memory DB
+#                                  (incremental; prints "N facts (S stale), M lessons -> <db> (+stored -removed)";
+#                                  skips, exit 0, if ruflo is absent or not persisting; exit 2 on a secret/PII hit, nothing written)
 #   team.sh mem-recall [--all-projects] [--limit N] "<query>"  -> semantic search; prints <kind>TAB<score>TAB<text>
-#                                  (kind fact|lesson, or fact:<project-id> with --all-projects; default limit 5)
+#                                  (kind fact|lesson:<role>, or fact:<project-id> with --all-projects; default limit 5)
 #   team.sh doccheck            -> doc drift guard: retired phrases, subcommands documented, SKILL flags present in HELP
 # --worktree: the teammate works in its own git worktree .team/worktrees/<team>-<role>
 # on a new branch team/<team>-<role> (from the current HEAD), like a separate person.
@@ -33,7 +34,9 @@
 set -euo pipefail
 sub=${1:?spawn|close}; shift
 # Secret/PII pattern (grep -Ei). One definition: facts-lint --pre-append and mem-sync both refuse on a hit.
-secret='dapi[0-9a-f]{32}|ghp_[0-9A-Za-z]{36}|sk-[0-9A-Za-z]{16}|AKIA[0-9A-Z]{16}|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
+# The email branch must not be followed by ":" or "/", so git remotes (git@host:org/repo,
+# ssh://git@host/org/repo) pass while "mail a@b.com." still hits; ERE has no lookahead.
+secret='(dapi|dose)[0-9a-f]{32}|gh[pousr]_[0-9A-Za-z]{36}|github_pat_[0-9A-Za-z_]{22,}|sk-ant-[0-9A-Za-z_-]{16,}|sk-[0-9A-Za-z]{16}|AKIA[0-9A-Z]{16}|xox[abposr]-[0-9A-Za-z-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|eyJ[0-9A-Za-z_-]{8,}\.eyJ[0-9A-Za-z_-]{8,}|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}([^:/A-Za-z0-9.-]|\.([^A-Za-z0-9]|$)|$)'
 
 if [ "$sub" = init ]; then
   team=${1:?team}
@@ -218,7 +221,7 @@ if [ "$sub" = facts-lint ]; then
 fi
 
 # Optional Ruflo memory bridge: a semantically searchable index over .team/facts.md and
-# role Lessons. facts.md stays the source of truth; every sync rebuilds the index from it.
+# role Lessons. facts.md stays the source of truth; every sync brings the index in line with it.
 # Without a working ruflo both subcommands say so and exit 0, so /team runs unchanged.
 if [ "$sub" = mem-sync ] || [ "$sub" = mem-recall ]; then
   db=${TEAM_MEMORY_DB:-$HOME/.claude/team/memory.db}
@@ -237,19 +240,6 @@ t = sys.stdin.read()
 for m in re.finditer(r"[\[{]", t):
     try: print(json.dumps(json.JSONDecoder().raw_decode(t[m.start():])[0])); break
     except ValueError: pass'; }
-  # Installed-but-broken ruflo (e.g. sql.js fallback) reports store success and keeps
-  # nothing, so prove a round trip before trusting it.
-  # Own namespace per call, hard-purged after (delete is a soft delete that leaves a row):
-  # concurrent runs never clobber each other's probe.
-  tok="team-probe-$$-$RANDOM$RANDOM"
-  _rf store -k probe -n "$tok" "--value=$tok" >/dev/null || true
-  got=$(_rf retrieve -k probe -n "$tok" --format json | _json \
-    | python3 -c 'import json,sys
-try: print(json.load(sys.stdin).get("content",""))
-except Exception: pass' || true)
-  _rf purge -n "$tok" -f >/dev/null || true
-  [ "$got" = "$tok" ] || { _say "ruflo memory not persisting — skipping"; exit 0; }
-
   # Project identity, namespaces and (for sync) the records to store, as TSV:
   #   meta  <project-id>  <facts-ns>  <lessons-ns,...>
   #   <kind> <ns> <key> <tags> <source> <value>      (kind: fact|lesson)
@@ -292,8 +282,9 @@ if os.path.isfile(facts):
         line = line.rstrip("\n")
         if not line.startswith("- ") or not line[2:].replace("~~", "").strip(): continue
         st = "stale" if line.startswith("- ~~") else "current"
+        text = one(line[2:].replace("~~", ""))
         print("\t".join(["fact", fns, hashlib.sha1(line.replace("~~", "").encode()).hexdigest(),
-                         f"status:{st},project:{pid}", f"{facts}:{n}", one(line[2:])]))
+                         f"status:{st},project:{pid}", f"{facts}:{n}", f"~~{text}~~" if st == "stale" else text]))
 for d, ns in lns.items():
     if not os.path.isdir(d): continue
     for f in sorted(os.listdir(d)):
@@ -318,21 +309,66 @@ PY
     hits=$(printf '%s\n' "$recs" | cut -f6 | grep -nEi -- "$secret" | cut -d: -f1 || true)
     if [ -n "$hits" ]; then
       for n in $hits; do printf '%s\n' "$recs" | sed -n "${n}p" | cut -f5 | sed 's/^/  secret\/PII pattern at /' >&2; done
-      echo "mem-sync: secret/PII pattern found — refusing, nothing stored" >&2; exit 2
+      echo "mem-sync: secret/PII pattern found — refusing, nothing written" >&2; exit 2
     fi
+  fi
+
+  # Installed-but-broken ruflo (e.g. sql.js fallback) reports store success and keeps
+  # nothing, so prove a round trip before trusting it.
+  # Own namespace per call, hard-purged after (delete is a soft delete that leaves a row):
+  # concurrent runs never clobber each other's probe.
+  tok="team-probe-$$-$RANDOM$RANDOM"
+  _rf store -k probe -n "$tok" "--value=$tok" >/dev/null || true
+  got=$(_rf retrieve -k probe -n "$tok" --format json | _json \
+    | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("content",""))
+except Exception: pass' || true)
+  _rf purge -n "$tok" -f >/dev/null || true
+  [ "$got" = "$tok" ] || { _say "ruflo memory not persisting — skipping"; exit 0; }
+
+  if [ "$sub" = mem-sync ]; then
+    work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+    printf '%s\n' "$recs" > "$work/recs"
+    added=0 removed=0
     for ns in $fns ${lnslist//,/ }; do
-      _rf purge -n "$ns" -f >/dev/null || { echo "mem-sync: purge of $ns failed — index left partial; re-run" >&2; exit 1; }
+      _rf list -n "$ns" --limit 1000000 --format json | _json > "$work/have" || true
+      # Diff by (key, length): the key fixes the text, and a stale fact is stored as
+      # ~~text~~, so the length fixes the status too. With nothing to remove, store only
+      # new/changed keys; with something removed, rebuild the namespace, because ruflo's
+      # per-key delete is a soft delete that leaves a tombstone row behind.
+      NS=$ns python3 - "$work/recs" "$work/have" > "$work/todo" <<'PY' || { echo "mem-sync: could not list $ns — left as is; re-run" >&2; exit 1; }
+import json, os, sys
+ns = os.environ["NS"]
+have = json.load(open(sys.argv[2]))
+if not isinstance(have, list): sys.exit(1)
+have = {e["key"]: e.get("size") for e in have if e.get("namespace", ns) == ns}
+want = {}
+for line in open(sys.argv[1], encoding="utf-8"):
+    f = line.rstrip("\n").split("\t")
+    if len(f) == 6 and f[1] == ns: want[f[2]] = f
+size = lambda v: len(v.encode("utf-16-le")) // 2   # ruflo reports JS string length
+gone = set(have) - set(want)
+print(len(gone))
+for k, f in want.items():
+    if gone or have.get(k) != size(f[5]): print("\t".join(f))
+PY
+      n=$(head -1 "$work/todo")
+      if [ "$n" -gt 0 ]; then
+        _rf purge -n "$ns" -f >/dev/null || { echo "mem-sync: purge of $ns failed — re-run" >&2; exit 1; }
+        removed=$((removed+n))
+      fi
+      while IFS=$'\t' read -r kind ns_ key tags _src val; do
+        [ -n "$kind" ] || continue
+        # --value=… form: a value starting with "-" is otherwise parsed as a flag and dropped.
+        out=$(_rf store -k "$key" -n "$ns_" "--value=$val" "--tags=$tags" --provenance agent_output || true)
+        case $out in *'[OK]'*) ;; *) echo "mem-sync: store failed for ${_src}" >&2; exit 1 ;; esac
+        added=$((added+1))
+      done < <(tail -n +2 "$work/todo")
     done
-    nf=0 ns_=0 nl=0
-    while IFS=$'\t' read -r kind ns key tags _src val; do
-      [ -n "$kind" ] || continue
-      # --value=… form: a value starting with "-" is otherwise parsed as a flag and dropped.
-      out=$(_rf store -k "$key" -n "$ns" "--value=$val" "--tags=$tags" --provenance agent_output || true)
-      case $out in *'[OK]'*) ;; *) echo "mem-sync: store failed for ${_src}" >&2; exit 1 ;; esac
-      if [ "$kind" = fact ]; then nf=$((nf+1)); case $tags in status:stale*) ns_=$((ns_+1)) ;; esac
-      else nl=$((nl+1)); fi
-    done <<<"$recs"
-    echo "mem-sync: $nf facts ($ns_ stale), $nl lessons -> $db"
+    nf=$(awk -F'\t' '$1=="fact"' "$work/recs" | wc -l | tr -d ' ')
+    nst=$(awk -F'\t' '$1=="fact" && $4 ~ /^status:stale/' "$work/recs" | wc -l | tr -d ' ')
+    nl=$(awk -F'\t' '$1=="lesson"' "$work/recs" | wc -l | tr -d ' ')
+    echo "mem-sync: $nf facts ($nst stale), $nl lessons -> $db (+$added -$removed)"
     exit 0
   fi
 
@@ -364,8 +400,9 @@ try: e = json.load(sys.stdin)
 except Exception: sys.exit(0)
 ns = os.environ["NS"]
 kind = "lesson" if ns.startswith("team-lessons-") else "fact"
-if kind == "fact" and os.environ["ALL"]:
-    kind += ":" + next((t[8:] for t in e.get("tags", []) if t.startswith("project:")), "?")
+tag = lambda p: next((t[len(p):] for t in e.get("tags", []) if t.startswith(p)), "?")
+if kind == "lesson": kind += ":" + tag("role:")
+elif os.environ["ALL"]: kind += ":" + tag("project:")
 print("%s\t%s\t%s" % (kind, os.environ["SCORE"], e.get("content", "")))' || true
   done <<<"$hits"
   exit 0

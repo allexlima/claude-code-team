@@ -57,10 +57,41 @@ out=$(cd "$W" && PATH="$W/stub:$nopath" bash "$TEAM_SH" mem-sync 2>&1) && rc=0 |
 out=$(cd "$W" && PATH="$W/stub:$nopath" bash "$TEAM_SH" mem-recall "x" 2>&1 >/dev/null) && rc=0 || rc=$?
 [ $rc = 0 ] && [[ $out == *"not persisting"* ]] && pass "broken: mem-recall skips" || fail "broken: mem-recall skips" "rc=$rc out=$out"
 
+# Secret/PII patterns (facts-lint --pre-append shares mem-sync's one definition). Every
+# token is assembled at run time so this file never holds a literal secret.
+h32=$(printf 'a%.0s' {1..32}); a36=$(printf 'A%.0s' {1..36})
+for t in "dap""i$h32" "dos""e$h32" "gh""p_$a36" "gh""o_$a36" "gh""u_$a36" "gh""s_$a36" "gh""r_$a36" \
+         "github""_pat_$a36" "sk-""ant-api03-$a36" "sk-""$a36" "AKI""A$(printf 'B%.0s' {1..16})" \
+         "xo""xb-1234567890-abcdefghij" "xo""xp-1234567890-abcdefghij" \
+         "-----BEGIN RSA PRIV""ATE KEY-----" "-----BEGIN PRIV""ATE KEY-----" \
+         "ey""JhbGciOiJIUzI1NiJ9.ey""JzdWIiOiIxMjM0NTY3ODkwIn0" \
+         "mail alice""@example.com today" "mail alice""@example.com." "alice""@example.com"; do
+  printf -- '- fact %s — evidence: x:1\n' "$t" > "$W/scan.md"
+  bash "$TEAM_SH" facts-lint --pre-append "$W/scan.md" >/dev/null 2>&1 && rc=0 || rc=$?
+  [ $rc = 2 ] && pass "secret refused: ${t:0:12}…" || fail "secret refused: ${t:0:12}…" "rc=$rc"
+done
+for t in "origin git@github.com:acme/widgets.git" "ssh://git@github.com/acme/widgets" \
+         "ssh://git@github.com:22/acme/widgets.git" "git@gitlab.example.com:a/b" "evidence team.sh:45 @327cfc2"; do
+  printf -- '- fact %s — evidence: x:1\n' "$t" > "$W/scan.md"
+  bash "$TEAM_SH" facts-lint --pre-append "$W/scan.md" >/dev/null 2>&1 && rc=0 || rc=$?
+  [ $rc = 0 ] && pass "not a secret: $t" || fail "not a secret: $t" "rc=$rc"
+done
+
 if ! command -v ruflo >/dev/null; then
   skip "live cases" "ruflo not installed"
   [ $fails = 0 ]; exit
 fi
+
+# Spy shim: logs every ruflo call's args, then runs the real ruflo.
+real=$(command -v ruflo); mkdir -p "$W/spy"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\nexec "%s" "$@"\n' "$W/spy.log" "$real" > "$W/spy/ruflo"
+chmod +x "$W/spy/ruflo"
+spysync() {  # <dir>: mem-sync through the spy; sets $out, $stores (non-probe store calls), $calls
+  : > "$W/spy.log"
+  out=$(cd "$1" && PATH="$W/spy:$PATH" bash "$TEAM_SH" mem-sync 2>&1) || true
+  calls=$(wc -l < "$W/spy.log" | tr -d ' ')
+  stores=$(grep '^memory store' "$W/spy.log" | grep -vc -- '-n team-probe-' || true)
+}
 
 A="$W/a" B="$W/b"
 mkrepo "$A" "git@github.com:acme/widgets.git" \
@@ -72,17 +103,18 @@ mkrepo "$B" "https://github.com/acme/gadgets.git" \
 
 # 3. a secret in facts -> exit 2, nothing stored (token built at run time, never literal)
 S="$W/s"; mkrepo "$S" "git@github.com:acme/secrets.git" "token dapi$(printf '0%.0s' {1..32}) leaked — evidence: x:1"
-out=$(cd "$S" && bash "$TEAM_SH" mem-sync 2>&1) && rc=0 || rc=$?
-n=$(count_ns team-)
-[ $rc = 2 ] && [ "$n" = 0 ] && pass "secret: refuse, exit 2, nothing stored" || fail "secret: refuse, exit 2, nothing stored" "rc=$rc entries=$n out=$out"
+: > "$W/spy.log"
+out=$(cd "$S" && PATH="$W/spy:$PATH" bash "$TEAM_SH" mem-sync 2>&1) && rc=0 || rc=$?
+n=$(count_ns team-); calls=$(grep -c '^memory store' "$W/spy.log" || true)
+[ $rc = 2 ] && [ "$n" = 0 ] && [ "$calls" = 0 ] && pass "secret: refuse, exit 2, no write at all" || fail "secret: refuse, exit 2, no write at all" "rc=$rc entries=$n stores=$calls out=$out"
 
 # 4. round trip: sync, then recall a fact by meaning (not by keyword)
 out=$(cd "$A" && bash "$TEAM_SH" mem-sync 2>&1) && rc=0 || rc=$?
-[ $rc = 0 ] && [[ $out == "mem-sync: 2 facts (1 stale), 1 lessons -> $TEAM_MEMORY_DB" ]] && pass "sync: counts" || fail "sync: counts" "rc=$rc out=$out"
+[ $rc = 0 ] && [[ $out == "mem-sync: 2 facts (1 stale), 1 lessons -> $TEAM_MEMORY_DB (+3 -0)" ]] && pass "sync: counts" || fail "sync: counts" "rc=$rc out=$out"
 hit=$(cd "$A" && bash "$TEAM_SH" mem-recall "which interpreter is needed for deployment")
 [[ $(printf '%s\n' "$hit" | head -1) == fact$'\t'*$'\t'"The deploy script requires python3"* ]] && pass "recall: fact found by meaning" || fail "recall: fact found by meaning" "$hit"
 hit=$(cd "$A" && bash "$TEAM_SH" mem-recall "test an outside command before trusting it")
-[[ $hit == *lesson$'\t'*"Always probe the external CLI"* ]] && pass "recall: lesson found" || fail "recall: lesson found" "$hit"
+[[ $hit == *lesson:impl$'\t'*"Always probe the external CLI"* ]] && pass "recall: lesson found" || fail "recall: lesson found" "$hit"
 [ -z "$(git -C "$A" status --short --untracked-files=all | grep -v '^?? .team/' || true)" ] && pass "no ruflo junk in the project dir" || fail "no ruflo junk in the project dir" "$(git -C "$A" status --short)"
 
 hit=$(cd "$A" && bash "$TEAM_SH" mem-recall -- "--deploy needs python3") && rc=0 || rc=$?
@@ -96,15 +128,29 @@ tags=$(cd "$W" && ruflo memory retrieve --path "$TEAM_MEMORY_DB" -k "$key" -n "$
 
 # 6. re-sync is idempotent
 before=$(count_ns team-)
-(cd "$A" && bash "$TEAM_SH" mem-sync >/dev/null)
+spysync "$A"
 after=$(count_ns team-)
-[ "$before" = 3 ] && [ "$after" = 3 ] && pass "re-sync idempotent" || fail "re-sync idempotent" "before=$before after=$after"
+[ "$before" = 3 ] && [ "$after" = 3 ] && [ "$stores" = 0 ] && [[ $out == *"(+0 -0)" ]] \
+  && pass "re-sync idempotent: no store calls" || fail "re-sync idempotent: no store calls" "before=$before after=$after stores=$stores out=$out"
+
+# 6b. striking a fact through is a change: one store, retagged stale; un-striking flips it back
+stale_of() {  # tags of the deploy fact
+  local k; k=$(printf '%s' "- The deploy script requires python3 to parse JSON output — evidence: deploy.sh:4" | python3 -c 'import hashlib,sys; print(hashlib.sha1(sys.stdin.buffer.read()).hexdigest())')
+  (cd "$W" && ruflo memory retrieve --path "$TEAM_MEMORY_DB" -k "$k" -n "$ns" --format json 2>/dev/null) | grep -o '"status:[a-z]*"' || true
+}
+sed -i.bak 's/^- The deploy script requires python3 to parse JSON output/- ~~The deploy script requires python3 to parse JSON output~~/' "$A/.team/facts.md"
+spysync "$A"
+[ "$stores" = 1 ] && [[ $out == "mem-sync: 2 facts (2 stale)"*"(+1 -0)" ]] && [ "$(stale_of)" = '"status:stale"' ] \
+  && pass "strike-through: 1 store, now stale" || fail "strike-through: 1 store, now stale" "stores=$stores out=$out tags=$(stale_of)"
+sed -i.bak 's/^- ~~The deploy script requires python3 to parse JSON output~~/- The deploy script requires python3 to parse JSON output/' "$A/.team/facts.md"
+spysync "$A"
+[ "$stores" = 1 ] && [ "$(stale_of)" = '"status:current"' ] && pass "un-strike: back to current" || fail "un-strike: back to current" "stores=$stores out=$out tags=$(stale_of)"
 
 # 7. a removed line disappears after re-sync
 sed -i.bak '/cache layer/d' "$A/.team/facts.md"
 printf -- '- \n-   \n' >> "$A/.team/facts.md"   # empty bullets are skipped, not a store failure
 out=$(cd "$A" && bash "$TEAM_SH" mem-sync)
-[[ $out == "mem-sync: 1 facts (0 stale), 1 lessons"* ]] && [ "$(count_ns team-facts-)" = 1 ] && pass "removed line gone" || fail "removed line gone" "$out"
+[[ $out == "mem-sync: 1 facts (0 stale), 1 lessons -> $TEAM_MEMORY_DB (+1 -1)" ]] && [ "$(count_ns team-facts-)" = 1 ] && pass "removed line gone" || fail "removed line gone" "$out"
 
 # 8. two projects in one DB: no leak without --all-projects, visible with it
 (cd "$B" && bash "$TEAM_SH" mem-sync >/dev/null)
@@ -119,7 +165,7 @@ git -C "$A" worktree add -q "$W/a-wt" -b wt
 hit=$(cd "$W/a-wt" && bash "$TEAM_SH" mem-recall "which interpreter is needed for deployment")
 [[ $hit == fact$'\t'*"The deploy script"* ]] && pass "worktree shares project id" || fail "worktree shares project id" "$hit"
 out=$(cd "$W/a-wt" && bash "$TEAM_SH" mem-sync)
-[[ $out == "mem-sync: 1 facts (0 stale), 1 lessons"* ]] && [ "$(count_ns team-facts-)" = 2 ] && pass "worktree sync reuses namespace" || fail "worktree sync reuses namespace" "$out facts=$(count_ns team-facts-)"
+[[ $out == "mem-sync: 1 facts (0 stale), 1 lessons"*"(+0 -0)" ]] && [ "$(count_ns team-facts-)" = 2 ] && pass "worktree sync reuses namespace" || fail "worktree sync reuses namespace" "$out facts=$(count_ns team-facts-)"
 
 # 10. no origin: id falls back to <basename>-<hash>, distinct per path
 mkdir -p "$W/c1/proj" "$W/c2/proj"
