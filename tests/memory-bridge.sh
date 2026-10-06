@@ -102,6 +102,7 @@ after=$(count_ns team-)
 
 # 7. a removed line disappears after re-sync
 sed -i.bak '/cache layer/d' "$A/.team/facts.md"
+printf -- '- \n-   \n' >> "$A/.team/facts.md"   # empty bullets are skipped, not a store failure
 out=$(cd "$A" && bash "$TEAM_SH" mem-sync)
 [[ $out == "mem-sync: 1 facts (0 stale), 1 lessons"* ]] && [ "$(count_ns team-facts-)" = 1 ] && pass "removed line gone" || fail "removed line gone" "$out"
 
@@ -125,6 +126,11 @@ mkdir -p "$W/c1/proj" "$W/c2/proj"
 for c in c1 c2; do git -C "$W/$c/proj" init -q; mkdir -p "$W/$c/proj/.team"; printf -- '- Fact from %s about the release train schedule\n' "$c" > "$W/$c/proj/.team/facts.md"; (cd "$W/$c/proj" && bash "$TEAM_SH" mem-sync >/dev/null); done
 hit=$(cd "$W/c1/proj" && bash "$TEAM_SH" mem-recall --limit 10 "release train schedule")
 [[ $hit == *"from c1"* && $hit != *"from c2"* ]] && pass "no-origin repos stay distinct" || fail "no-origin repos stay distinct" "$hit"
+
+# 11. origin URL forms normalize to one id (ssh://user@Host:port/… == git@host:…)
+D="$W/d"; mkrepo "$D" "ssh://git@GitHub.com:22/acme/widgets.git"
+hit=$(cd "$D" && bash "$TEAM_SH" mem-recall "which interpreter is needed for deployment")
+[[ $hit == fact$'\t'*"The deploy script"* ]] && pass "origin forms share an id" || fail "origin forms share an id" "$hit"
 
 [ $fails = 0 ] && echo "all passed" || echo "$fails failed"
 [ $fails = 0 ]

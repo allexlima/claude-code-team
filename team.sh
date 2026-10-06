@@ -239,13 +239,14 @@ for m in re.finditer(r"[\[{]", t):
     except ValueError: pass'; }
   # Installed-but-broken ruflo (e.g. sql.js fallback) reports store success and keeps
   # nothing, so prove a round trip before trusting it.
-  tok="probe-$$-$RANDOM"
-  _rf store -k probe -n team-probe "--value=$tok" >/dev/null || true
-  got=$(_rf retrieve -k probe -n team-probe --format json | _json \
+  # Unique key, deleted alone: concurrent syncs must not clobber each other's probe.
+  tok="probe-$$-$RANDOM$RANDOM"
+  _rf store -k "$tok" -n team-probe "--value=$tok" >/dev/null || true
+  got=$(_rf retrieve -k "$tok" -n team-probe --format json | _json \
     | python3 -c 'import json,sys
 try: print(json.load(sys.stdin).get("content",""))
 except Exception: pass' || true)
-  _rf purge -n team-probe -f >/dev/null || true
+  _rf delete -k "$tok" -n team-probe -f >/dev/null || true
   [ "$got" = "$tok" ] || { _say "ruflo memory not persisting — skipping"; exit 0; }
 
   # Project identity, namespaces and (for sync) the records to store, as TSV:
@@ -271,7 +272,10 @@ if url:
     scheme = re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", pid)
     pid = pid[scheme.end():] if scheme else pid
     pid = re.sub(r"^[^@/]*@", "", pid)
-    if not scheme: pid = re.sub(r"^([^/:]+):", r"\1/", pid)   # scp-style host:org/repo
+    if scheme: pid = re.sub(r"^([^/:]+):\d+/", r"\1/", pid)   # drop :port
+    else: pid = re.sub(r"^([^/:]+):", r"\1/", pid)               # scp-style host:org/repo
+    host, _, rest = pid.partition("/")
+    pid = f"{host.lower()}/{rest}" if rest else host.lower()
     pid = re.sub(r"\.git$", "", pid.rstrip("/")).rstrip("/")
 else:
     pid = f"{os.path.basename(root)}-{h(root, 8)}"
@@ -287,7 +291,7 @@ facts = os.path.join(root, ".team", "facts.md")
 if os.path.isfile(facts):
     for n, line in enumerate(open(facts, encoding="utf-8"), 1):
         line = line.rstrip("\n")
-        if not line.startswith("- "): continue
+        if not line.startswith("- ") or not line[2:].replace("~~", "").strip(): continue
         st = "stale" if line.startswith("- ~~") else "current"
         print("\t".join(["fact", fns, hashlib.sha1(line.replace("~~", "").encode()).hexdigest(),
                          f"status:{st},project:{pid}", f"{facts}:{n}", one(line[2:])]))
