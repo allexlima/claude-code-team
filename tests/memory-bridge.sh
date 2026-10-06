@@ -65,7 +65,8 @@ for t in "dap""i$h32" "dos""e$h32" "gh""p_$a36" "gh""o_$a36" "gh""u_$a36" "gh""s
          "xo""xb-1234567890-abcdefghij" "xo""xp-1234567890-abcdefghij" "xa""pp-1-A012345-abcdef0123" \
          "-----BEGIN RSA PRIV""ATE KEY-----" "-----BEGIN PRIV""ATE KEY-----" \
          "ey""JhbGciOiJIUzI1NiJ9.ey""JzdWIiOiIxMjM0NTY3ODkwIn0" \
-         "mail alice""@example.com today" "mail alice""@example.com." "alice""@example.com"; do
+         "mail alice""@example.com today" "mail alice""@example.com." "alice""@example.com" \
+         "contact: alice""@example.com: ping" "see alice""@example.com/profile" "ssh://deploy""@example.com:22/x"; do
   printf -- '- fact %s — evidence: x:1\n' "$t" > "$W/scan.md"
   bash "$TEAM_SH" facts-lint --pre-append "$W/scan.md" >/dev/null 2>&1 && rc=0 || rc=$?
   [ $rc = 2 ] && pass "secret refused: ${t:0:12}…" || fail "secret refused: ${t:0:12}…" "rc=$rc"
@@ -150,7 +151,7 @@ spysync "$A"
 sed -i.bak '/cache layer/d' "$A/.team/facts.md"
 printf -- '- \n-   \n' >> "$A/.team/facts.md"   # empty bullets are skipped, not a store failure
 out=$(cd "$A" && bash "$TEAM_SH" mem-sync)
-[[ $out == "mem-sync: 1 facts (0 stale), 1 lessons -> $TEAM_MEMORY_DB (+1 -1)" ]] && [ "$(count_ns team-facts-)" = 1 ] && pass "removed line gone" || fail "removed line gone" "$out"
+[[ $out == "mem-sync: 1 facts (0 stale), 1 lessons -> $TEAM_MEMORY_DB (+0 -1)" ]] && [ "$(count_ns team-facts-)" = 1 ] && pass "removed line gone" || fail "removed line gone" "$out"
 
 # 8. two projects in one DB: no leak without --all-projects, visible with it
 (cd "$B" && bash "$TEAM_SH" mem-sync >/dev/null)

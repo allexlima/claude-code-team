@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run each teammate as an interactive `claude` session in its own tab/pane.
 #   team.sh spawn [--tmux] [--tabs] [--worktree] [--no-caveman] <team> <role> <prompt-file> [model]
-#   team.sh close <team>
+#   team.sh close <team>  -> force-closes every recorded pane/tab; exit 1 (rows kept for a retry) if one could not be closed
 #   team.sh init <team>   -> creates .team/ (idempotent) + a run dir; prints the run dir path
 #   team.sh gate-init     -> sets up the no-mistakes gate for this repo (needs an "origin" remote)
 #   team.sh clean <team>  -> removes the team's worktrees that have no uncommitted changes (branches kept)
@@ -13,11 +13,12 @@
 #   team.sh roles               -> list roles available here: "<name>  project|user  <path>"
 #   team.sh facts-lint [--pre-append <file>]  -> freshness of .team/facts.md facts (FRESH/CHECK/GONE/NOANCHOR + DUP); --pre-append scans <file> for secrets
 #   team.sh mem-sync            -> optional Ruflo index: sync this project's facts + all role Lessons into the memory DB
-#                                  (incremental; prints "N facts (S stale), M lessons -> <db> (+stored -removed)";
+#                                  (incremental; prints "N facts (S stale), M lessons -> <db> (+added/changed -removed)";
 #                                  skips, exit 0, if ruflo is absent or not persisting; exit 2 on a secret/PII hit, nothing written)
 #   team.sh mem-recall [--all-projects] [--limit N] "<query>"  -> semantic search; prints <kind>TAB<score>TAB<text>
 #                                  (kind fact|lesson:<role>, or fact:<project-id> with --all-projects; default limit 5)
 #   team.sh doccheck            -> doc drift guard: retired phrases, subcommands documented, SKILL flags present in HELP
+#   team.sh --help              -> prints this header. Any other unknown subcommand exits 2 (it never falls through to spawn).
 # --worktree: the teammate works in its own git worktree .team/worktrees/<team>-<role>
 # on a new branch team/<team>-<role> (from the current HEAD), like a separate person.
 # Each new worktree is pre-accepted in ~/.claude.json so the workspace-trust prompt
@@ -32,11 +33,25 @@
 # Memory DB: ${TEAM_MEMORY_DB:-~/.claude/team/memory.db} (passed to every ruflo call as --path).
 # Teammates start in auto permission mode (override with TEAM_PERMISSION_MODE). Spawned tabs/panes are recorded in /tmp/team-<team>.tabs for close.
 set -euo pipefail
-sub=${1:?spawn|close}; shift
-# Secret/PII pattern (grep -Ei). One definition: facts-lint --pre-append and mem-sync both refuse on a hit.
-# The email branch must not be followed by ":" or "/", so git remotes (git@host:org/repo,
-# ssh://git@host/org/repo) pass while "mail a@b.com." still hits; ERE has no lookahead.
-secret='(dapi|dose)[0-9a-f]{32}|gh[pousr]_[0-9A-Za-z]{36}|github_pat_[0-9A-Za-z_]{22,}|sk-(ant|proj|svcacct)-[0-9A-Za-z_-]{16,}|sk-[0-9A-Za-z]{16}|AKIA[0-9A-Z]{16}|(xox[abposr]|xapp)-[0-9A-Za-z-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|eyJ[0-9A-Za-z_-]{8,}\.eyJ[0-9A-Za-z_-]{8,}|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}([^:/A-Za-z0-9.-]|\.([^A-Za-z0-9]|$)|$)'
+# Dispatch: anything not listed is refused here, because an unknown word would
+# otherwise fall through to the spawn path below and open a real pane.
+subs="init gate-init clean close models role roles facts-lint mem-sync mem-recall doccheck park show list spawn"
+_usage() { sed -n '2,/^set -euo pipefail/p' "$0" | sed '$d; s/^# \{0,1\}//'; }
+case ${1:-} in
+  -h|--help|help) _usage; exit 0 ;;
+  '') _usage >&2; exit 2 ;;
+esac
+case " $subs " in
+  *" $1 "*) ;;
+  *) echo "team.sh: unknown subcommand '$1' (see: team.sh --help)" >&2; exit 2 ;;
+esac
+sub=$1; shift
+# Secret/PII pattern (grep -Ei). One definition: facts-lint --pre-append and mem-sync both
+# refuse on a hit, and both scan through _secret_lines (stdin -> "n:line" per hit).
+# Git remotes (git@host:org/repo, ssh://git@host/...) are not emails: _secret_lines turns
+# the "git@" user into "git " first, so every other address still hits, whatever follows it.
+secret='(dapi|dose)[0-9a-f]{32}|gh[pousr]_[0-9A-Za-z]{36}|github_pat_[0-9A-Za-z_]{22,}|sk-(ant|proj|svcacct)-[0-9A-Za-z_-]{16,}|sk-[0-9A-Za-z]{16}|AKIA[0-9A-Z]{16}|(xox[abposr]|xapp)-[0-9A-Za-z-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|eyJ[0-9A-Za-z_-]{8,}\.eyJ[0-9A-Za-z_-]{8,}|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
+_secret_lines() { sed -E 's/(^|[^A-Za-z0-9._%+-])git@/\1git /g' | grep -nEi -- "$secret"; }
 
 if [ "$sub" = init ]; then
   team=${1:?team}
@@ -94,15 +109,23 @@ fi
 if [ "$sub" = close ]; then
   team=${1:?team}; reg="/tmp/team-$team.tabs"
   [ -f "$reg" ] || { echo "no tabs recorded for $team"; exit 0; }
-  while read -r backend id _; do
+  # Teammates are live claude sessions, and cmux refuses to close a surface with a
+  # running process unless forced. A pane that is already gone counts as closed;
+  # any other failure is reported and its row kept, so a re-run can retry it.
+  keep=""
+  while IFS= read -r row; do
+    read -r backend id _ <<<"$row"
     case $backend in
-      cmux) cmux close-surface --surface "$id" >/dev/null 2>&1 || true ;;
-      tmux) tmux kill-pane -t "$id" 2>/dev/null || true ;;
+      cmux) err=$(cmux close-surface --surface "$id" --force 2>&1 >/dev/null) && err= ;;
+      tmux) err=$(tmux kill-pane -t "$id" 2>&1) && err= ;;
+      *) err= ;;
     esac
-    echo "closed $backend $id"
+    case $err in *not_found*|*"can't find"*) err= ;; esac
+    if [ -z "$err" ]; then echo "closed $backend $id"
+    else echo "could not close $backend $id: $err" >&2; keep+="$row"$'\n'; fi
   done < "$reg"
-  rm -f "$reg"
-  exit 0
+  [ -z "$keep" ] && { rm -f "$reg"; exit 0; }
+  printf '%s' "$keep" > "$reg"; exit 1
 fi
 
 # Models available here. The option list is org-managed (managed-settings.json) and
@@ -190,7 +213,7 @@ fi
 if [ "$sub" = facts-lint ]; then
   if [ "${1:-}" = --pre-append ]; then
     f=${2:?file to scan}
-    if grep -nEi -- "$secret" "$f"; then
+    if _secret_lines < "$f"; then
       echo "facts-lint: secret/PII pattern above — refusing to append" >&2; exit 2
     fi
     echo "facts-lint: no secret/PII pattern found in $f"; exit 0
@@ -204,7 +227,9 @@ if [ "$sub" = facts-lint ]; then
       *) continue ;;
     esac
     sha=$(printf '%s\n' "$line" | sed -n 's/.*@\([0-9a-f]\{7,40\}\).*/\1/p')
-    file=$(printf '%s\n' "$line" | grep -oE '[A-Za-z0-9_./-]+:[0-9]+' | head -1 | cut -d: -f1)
+    # || true: evidence with no file:line makes grep exit 1, which pipefail + set -e
+    # would turn into a silent abort of the whole lint.
+    file=$(printf '%s\n' "$line" | grep -oE '[A-Za-z0-9_./-]+:[0-9]+' | head -1 | cut -d: -f1 || true)
     if printf '%s\n' "$line" | grep -q '@nogit' || [ -z "$sha" ]; then st=NOANCHOR
     elif [ -z "$file" ]; then st=CHECK
     elif [ ! -e "$root/$file" ] && [ ! -e "$file" ]; then st=GONE
@@ -306,7 +331,7 @@ PY
 
   if [ "$sub" = mem-sync ]; then
     recs=$(printf '%s\n' "$plan" | awk -F'\t' '$1!="meta"')
-    hits=$(printf '%s\n' "$recs" | cut -f6 | grep -nEi -- "$secret" | cut -d: -f1 || true)
+    hits=$(printf '%s\n' "$recs" | cut -f6 | _secret_lines | cut -d: -f1 || true)
     if [ -n "$hits" ]; then
       for n in $hits; do printf '%s\n' "$recs" | sed -n "${n}p" | cut -f5 | sed 's/^/  secret\/PII pattern at /' >&2; done
       echo "mem-sync: secret/PII pattern found — refusing, nothing written" >&2; exit 2
@@ -349,20 +374,21 @@ for line in open(sys.argv[1], encoding="utf-8"):
 size = lambda v: len(v.encode("utf-16-le")) // 2   # ruflo reports JS string length
 gone = set(have) - set(want)
 print(len(gone))
-for k, f in want.items():
-    if gone or have.get(k) != size(f[5]): print("\t".join(f))
+for k, f in want.items():   # leading 1/0: new or changed vs. only re-stored by a rebuild
+    changed = have.get(k) != size(f[5])
+    if gone or changed: print("\t".join(["1" if changed else "0", *f]))
 PY
       n=$(head -1 "$work/todo")
       if [ "$n" -gt 0 ]; then
         _rf purge -n "$ns" -f >/dev/null || { echo "mem-sync: purge of $ns failed — re-run" >&2; exit 1; }
         removed=$((removed+n))
       fi
-      while IFS=$'\t' read -r kind ns_ key tags _src val; do
+      while IFS=$'\t' read -r changed kind ns_ key tags _src val; do
         [ -n "$kind" ] || continue
         # --value=… form: a value starting with "-" is otherwise parsed as a flag and dropped.
         out=$(_rf store -k "$key" -n "$ns_" "--value=$val" "--tags=$tags" --provenance agent_output || true)
         case $out in *'[OK]'*) ;; *) echo "mem-sync: store failed for ${_src}" >&2; exit 1 ;; esac
-        added=$((added+1))
+        added=$((added+changed))
       done < <(tail -n +2 "$work/todo")
     done
     nf=$(awk -F'\t' '$1=="fact"' "$work/recs" | wc -l | tr -d ' ')
@@ -418,7 +444,7 @@ if [ "$sub" = doccheck ]; then
     grep -rnF -- "$pat" "$here/SKILL.md" "$here/HELP.md" "$here/README.md" 2>/dev/null && rc=1
   done
   hdr=$(sed '/^set -euo pipefail/q' "$here/team.sh")
-  for s in init gate-init clean close models role roles facts-lint mem-sync mem-recall doccheck park show list spawn; do
+  for s in $subs; do
     printf '%s\n' "$hdr" | grep -qw -- "$s" || { echo "doccheck: subcommand '$s' not documented in the header" >&2; rc=1; }
   done
   for fl in $(sed -n '4p' "$here/SKILL.md" | grep -oE '\-\-[a-z-]+'); do
@@ -509,7 +535,8 @@ while :; do case ${1:-} in
   --tmux) backend=tmux; shift ;; --tabs) layout=tab; shift ;; --worktree) worktree=1; shift ;;
   --no-caveman) caveman=; shift ;; *) break ;;
 esac; done
-team=$1 role=$2 pfile=$3 model=${4:-}
+spawn_usage="usage: team.sh spawn [--tmux] [--tabs] [--worktree] [--no-caveman] <team> <role> <prompt-file> [model]"
+team=${1:?$spawn_usage} role=${2:?$spawn_usage} pfile=${3:?$spawn_usage} model=${4:-}
 
 # A wrong model does not fail the spawn: claude exits 0, the pane opens, and the
 # session is dead on arrival -- easy to miss entirely once the teammate is parked
