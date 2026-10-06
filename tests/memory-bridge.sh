@@ -29,7 +29,7 @@ mkrepo() {  # <dir> <origin-url> <fact-line>...
   { printf '# Facts\n\n<!-- - <fact> — evidence: … -->\n'; for f in "$@"; do printf -- '- %s\n' "$f"; done; } > "$d/.team/facts.md"
 }
 count_ns() {  # entries in namespaces matching prefix $1 (real ruflo, temp DB)
-  (cd "$W" && ruflo memory list --path "$TEAM_MEMORY_DB" --format json 2>/dev/null) | python3 -c '
+  (cd "$W" && ruflo memory list --path "$TEAM_MEMORY_DB" --limit 100000 --format json 2>/dev/null) | python3 -c '
 import json, re, sys
 t = sys.stdin.read()
 for m in re.finditer(r"[\[{]", t):
@@ -128,7 +128,7 @@ hit=$(cd "$W/c1/proj" && bash "$TEAM_SH" mem-recall --limit 10 "release train sc
 [[ $hit == *"from c1"* && $hit != *"from c2"* ]] && pass "no-origin repos stay distinct" || fail "no-origin repos stay distinct" "$hit"
 
 # 11. origin URL forms normalize to one id (ssh://user@Host:port/… == git@host:…)
-D="$W/d"; mkrepo "$D" "ssh://git@GitHub.com:22/acme/widgets.git"
+D="$W/d"; mkrepo "$D" "ssh://git@GitHub.com:22/Acme/Widgets.git"
 hit=$(cd "$D" && bash "$TEAM_SH" mem-recall "which interpreter is needed for deployment")
 [[ $hit == fact$'\t'*"The deploy script"* ]] && pass "origin forms share an id" || fail "origin forms share an id" "$hit"
 

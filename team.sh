@@ -239,14 +239,15 @@ for m in re.finditer(r"[\[{]", t):
     except ValueError: pass'; }
   # Installed-but-broken ruflo (e.g. sql.js fallback) reports store success and keeps
   # nothing, so prove a round trip before trusting it.
-  # Unique key, deleted alone: concurrent syncs must not clobber each other's probe.
-  tok="probe-$$-$RANDOM$RANDOM"
-  _rf store -k "$tok" -n team-probe "--value=$tok" >/dev/null || true
-  got=$(_rf retrieve -k "$tok" -n team-probe --format json | _json \
+  # Own namespace per call, hard-purged after (delete is a soft delete that leaves a row):
+  # concurrent runs never clobber each other's probe.
+  tok="team-probe-$$-$RANDOM$RANDOM"
+  _rf store -k probe -n "$tok" "--value=$tok" >/dev/null || true
+  got=$(_rf retrieve -k probe -n "$tok" --format json | _json \
     | python3 -c 'import json,sys
 try: print(json.load(sys.stdin).get("content",""))
 except Exception: pass' || true)
-  _rf delete -k "$tok" -n team-probe -f >/dev/null || true
+  _rf purge -n "$tok" -f >/dev/null || true
   [ "$got" = "$tok" ] || { _say "ruflo memory not persisting — skipping"; exit 0; }
 
   # Project identity, namespaces and (for sync) the records to store, as TSV:
@@ -274,9 +275,7 @@ if url:
     pid = re.sub(r"^[^@/]*@", "", pid)
     if scheme: pid = re.sub(r"^([^/:]+):\d+/", r"\1/", pid)   # drop :port
     else: pid = re.sub(r"^([^/:]+):", r"\1/", pid)               # scp-style host:org/repo
-    host, _, rest = pid.partition("/")
-    pid = f"{host.lower()}/{rest}" if rest else host.lower()
-    pid = re.sub(r"\.git$", "", pid.rstrip("/")).rstrip("/")
+    pid = re.sub(r"\.git$", "", pid.rstrip("/")).rstrip("/").lower()   # forges fold case
 else:
     pid = f"{os.path.basename(root)}-{h(root, 8)}"
 fns = f"team-facts-{h(pid)}"
