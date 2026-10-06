@@ -21,6 +21,7 @@ It emulates Claude Code's experimental [agent teams](https://code.claude.com/doc
 - **`--autoroles`** — derives roles from your project (README, layout, tests, git diff, stack) and asks you to confirm.
 - **Project memory in `.team/`** (git-ignored) — project role specs (plus a shared role library in `~/.claude/team/roles/`), a full record of every run, and a `facts.md` ledger of verified findings that future teams read first.
 - **Token-aware** — teammates use parallel subagents and the [caveman](https://github.com/JuliusBrussee/caveman) terse style for agent-to-agent chatter; your summary stays in normal prose.
+- **Optional Ruflo memory bridge** — when `ruflo` is installed, `mem-sync` indexes facts and lessons for semantic recall; `mem-recall` surfaces them at each run start. See `/team --help`.
 
 ## Install
 
@@ -40,7 +41,7 @@ That's it — start (or restart) Claude Code and run `/team --help`.
 |---|---|
 | Required | [Claude Code](https://code.claude.com), and **cmux** or **tmux** for panes (or use `--inline` for no panes) |
 | Build runs | `git`, an `origin` remote, [no-mistakes](https://github.com/kunchenguid/no-mistakes) (optional — without it, commits just stay local) |
-| Optional | [caveman](https://github.com/JuliusBrussee/caveman) installed at `~/.agents/skills/caveman` (skipped if absent) |
+| Optional | [caveman](https://github.com/JuliusBrussee/caveman) installed at `~/.agents/skills/caveman` (skipped if absent) · [ruflo](https://github.com/ruvnet/ruflo) for cross-session memory (`mem-sync` / `mem-recall`; skipped if absent — see `/team --help`) |
 
 ## Usage
 

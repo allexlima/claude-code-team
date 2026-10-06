@@ -92,6 +92,26 @@ when you agree to promote one — make it a private git repo to sync machines). 
 machine it starts empty until you sync it, so your saved roles are not lost, just not
 there yet.
 
+## Ruflo memory bridge (optional)
+
+When `ruflo` is installed and its memory is persisting, `/team` indexes
+`.team/facts.md` and role `**Lessons:**` sections into a semantic-search database
+so future runs can recall related findings across sessions.
+
+- **`mem-recall "<query>"`** (run at step 1, before spawning): returns semantically
+  matched facts and lessons as leads to re-check. Facts are scoped to this project
+  by default; `--all-projects` searches every project's facts. Lessons are always
+  global.
+- **`mem-sync`** (run at step 5, after updating facts and lessons): writes this
+  project's facts and all role lessons to Ruflo memory. Skips automatically if
+  `ruflo` is absent or memory is not persisting. Refuses if secrets or PII are
+  detected (same check as `facts-lint`).
+- **Database:** `${TEAM_MEMORY_DB:-$HOME/.claude/team/memory.db}` — override
+  `TEAM_MEMORY_DB` to isolate a project or share memory across machines.
+
+Without Ruflo, `/team` behaves exactly as today — `.team/facts.md` stays the
+single source of truth.
+
 ## Where teammates appear
     In cmux (default)   Your tab splits: you on the left, teammates in a two-column
                         grid on the right; idle ones fold away into tabs
