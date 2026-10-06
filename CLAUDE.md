@@ -14,7 +14,7 @@ quote it word-for-word — they never restate it in their own words.
 |---|---|---|
 | Flags, defaults, ranges (model default, team size, layout) | `HELP.md` (what `--help` prints) | `SKILL.md` keeps only what the lead must act on; `README.md` links to `--help` instead of keeping its own flag table |
 | Lead procedure (steps, gates, order) | `SKILL.md` | `HELP.md` / `README.md` describe outcomes only |
-| Script interface (subcommands, args, exit codes) | `team.sh` header (lines 1–27) | `SKILL.md` shows only the invocations it needs |
+| Script interface (subcommands, args, exit codes) | `team.sh` header (the comment block above `set -euo pipefail`) | `SKILL.md` shows only the invocations it needs |
 | Role resolution order | `team.sh role` (code) + `SKILL.md` S2 (one sentence) | `HELP.md` and `README.md` are word-for-word summaries |
 | Role content format (the five headings) | `SKILL.md` (the save-role step) | — |
 | Project facts | `.team/facts.md` only | roles never hold facts; the shared library never holds project content |
