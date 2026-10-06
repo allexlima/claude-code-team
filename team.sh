@@ -36,7 +36,7 @@ sub=${1:?spawn|close}; shift
 # Secret/PII pattern (grep -Ei). One definition: facts-lint --pre-append and mem-sync both refuse on a hit.
 # The email branch must not be followed by ":" or "/", so git remotes (git@host:org/repo,
 # ssh://git@host/org/repo) pass while "mail a@b.com." still hits; ERE has no lookahead.
-secret='(dapi|dose)[0-9a-f]{32}|gh[pousr]_[0-9A-Za-z]{36}|github_pat_[0-9A-Za-z_]{22,}|sk-ant-[0-9A-Za-z_-]{16,}|sk-[0-9A-Za-z]{16}|AKIA[0-9A-Z]{16}|xox[abposr]-[0-9A-Za-z-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|eyJ[0-9A-Za-z_-]{8,}\.eyJ[0-9A-Za-z_-]{8,}|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}([^:/A-Za-z0-9.-]|\.([^A-Za-z0-9]|$)|$)'
+secret='(dapi|dose)[0-9a-f]{32}|gh[pousr]_[0-9A-Za-z]{36}|github_pat_[0-9A-Za-z_]{22,}|sk-(ant|proj|svcacct)-[0-9A-Za-z_-]{16,}|sk-[0-9A-Za-z]{16}|AKIA[0-9A-Z]{16}|(xox[abposr]|xapp)-[0-9A-Za-z-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|eyJ[0-9A-Za-z_-]{8,}\.eyJ[0-9A-Za-z_-]{8,}|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}([^:/A-Za-z0-9.-]|\.([^A-Za-z0-9]|$)|$)'
 
 if [ "$sub" = init ]; then
   team=${1:?team}

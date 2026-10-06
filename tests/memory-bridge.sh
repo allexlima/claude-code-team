@@ -61,8 +61,8 @@ out=$(cd "$W" && PATH="$W/stub:$nopath" bash "$TEAM_SH" mem-recall "x" 2>&1 >/de
 # token is assembled at run time so this file never holds a literal secret.
 h32=$(printf 'a%.0s' {1..32}); a36=$(printf 'A%.0s' {1..36})
 for t in "dap""i$h32" "dos""e$h32" "gh""p_$a36" "gh""o_$a36" "gh""u_$a36" "gh""s_$a36" "gh""r_$a36" \
-         "github""_pat_$a36" "sk-""ant-api03-$a36" "sk-""$a36" "AKI""A$(printf 'B%.0s' {1..16})" \
-         "xo""xb-1234567890-abcdefghij" "xo""xp-1234567890-abcdefghij" \
+         "github""_pat_$a36" "sk-""ant-api03-$a36" "sk-""proj-$a36" "sk-""svcacct-$a36" "sk-""$a36" "AKI""A$(printf 'B%.0s' {1..16})" \
+         "xo""xb-1234567890-abcdefghij" "xo""xp-1234567890-abcdefghij" "xa""pp-1-A012345-abcdef0123" \
          "-----BEGIN RSA PRIV""ATE KEY-----" "-----BEGIN PRIV""ATE KEY-----" \
          "ey""JhbGciOiJIUzI1NiJ9.ey""JzdWIiOiIxMjM0NTY3ODkwIn0" \
          "mail alice""@example.com today" "mail alice""@example.com." "alice""@example.com"; do
