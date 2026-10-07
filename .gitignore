@@ -1,6 +1,3 @@
 .team/
 .DS_Store
 CLAUDE.local.md
-.claude-flow/
-.swarm/
-ruvector.db

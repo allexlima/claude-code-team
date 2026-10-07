@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for team.sh's command surface: subcommand dispatch, facts-lint robustness,
-# and close. Self-contained: runs in a mktemp -d dir with a stub `cmux` on PATH, so
+# close, and the facts-lint secret/PII scan. Self-contained: runs in a mktemp -d dir with a stub `cmux` on PATH, so
 # no real pane is ever opened or closed. Prints PASS/FAIL per case; exit 1 on any FAIL.
 #   bash tests/team-cli.sh
 set -euo pipefail
@@ -62,6 +62,27 @@ out=$(bash "$TEAM_SH" close "tcli$$" 2>&1) && rc=0 || rc=$?
 [ $rc != 0 ] && [[ $out == *"could not close"* ]] && [[ $out != *"closed cmux surface:9"* ]] && grep -q 'surface:9' /tmp/team-tcli$$.tabs \
   && pass "close: failure reported, row kept" || fail "close: failure reported, row kept" "rc=$rc out=$out"
 rm -f /tmp/team-tcli$$.tabs
+
+# 4. facts-lint --pre-append refuses secrets/PII and lets git remotes through. Every
+# token is assembled at run time so this file never holds a literal secret.
+h32=$(printf 'a%.0s' {1..32}); a36=$(printf 'A%.0s' {1..36})
+for t in "dap""i$h32" "dos""e$h32" "gh""p_$a36" "gh""o_$a36" "gh""u_$a36" "gh""s_$a36" "gh""r_$a36" \
+         "github""_pat_$a36" "sk-""ant-api03-$a36" "sk-""proj-$a36" "sk-""svcacct-$a36" "sk-""$a36" "AKI""A$(printf 'B%.0s' {1..16})" \
+         "xo""xb-1234567890-abcdefghij" "xo""xp-1234567890-abcdefghij" "xa""pp-1-A012345-abcdef0123" \
+         "-----BEGIN RSA PRIV""ATE KEY-----" "-----BEGIN PRIV""ATE KEY-----" \
+         "ey""JhbGciOiJIUzI1NiJ9.ey""JzdWIiOiIxMjM0NTY3ODkwIn0" \
+         "mail alice""@example.com today" "mail alice""@example.com." "alice""@example.com" \
+         "contact: alice""@example.com: ping" "see alice""@example.com/profile" "ssh://deploy""@example.com:22/x"; do
+  printf -- '- fact %s — evidence: x:1\n' "$t" > "$W/scan.md"
+  bash "$TEAM_SH" facts-lint --pre-append "$W/scan.md" >/dev/null 2>&1 && rc=0 || rc=$?
+  [ $rc = 2 ] && pass "secret refused: ${t:0:12}…" || fail "secret refused: ${t:0:12}…" "rc=$rc"
+done
+for t in "origin git@github.com:acme/widgets.git" "ssh://git@github.com/acme/widgets" \
+         "ssh://git@github.com:22/acme/widgets.git" "git@gitlab.example.com:a/b" "evidence team.sh:45 @327cfc2"; do
+  printf -- '- fact %s — evidence: x:1\n' "$t" > "$W/scan.md"
+  bash "$TEAM_SH" facts-lint --pre-append "$W/scan.md" >/dev/null 2>&1 && rc=0 || rc=$?
+  [ $rc = 0 ] && pass "not a secret: $t" || fail "not a secret: $t" "rc=$rc"
+done
 
 [ $fails = 0 ] && echo "all passed" || echo "$fails failed"
 [ $fails = 0 ]
