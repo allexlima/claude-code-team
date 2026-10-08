@@ -68,14 +68,15 @@ _st_row() {
   fi
 
   # ------ STEP (last line of status file, max 40 chars) -------------------
-  local step='—'
+  # Use ASCII '-' not '—' (em-dash is 3 bytes; printf %-Ns pads by bytes, misaligning)
+  local step='-'
   if [ -n "$stf" ] && [ -f "$stf" ]; then
     local raw; raw=$(tail -1 "$stf" 2>/dev/null | cut -c1-40) || true
-    step="${raw:-—}"
+    step="${raw:--}"
   fi
 
   # ------ LAST_ACTIVITY (age of newest {report, status} mtime) ------------
-  local newest=0 la='—' age=0
+  local newest=0 la='-' age=0
   local f t
   for f in "$rpt" "$stf"; do
     [ -n "$f" ] && [ -f "$f" ] || continue
@@ -183,11 +184,18 @@ sub_status() {
   local run
   run=$(ls -dt "$root/.team/runs/"*"-$team" 2>/dev/null | head -1 || true)
 
-  # Resolve lead's pane_ref for PARKED detection (cmux only, once per call)
+  # Resolve lead's pane_ref for PARKED detection.
+  # When running inside the monitor loop, sub_monitor pre-sets TEAM_LEAD_PANE so
+  # _lead_pane (which identifies the calling pane) returns the monitor's own pane
+  # rather than the lead's pane — making PARKED/PROMPT detection wrong.
   local leadpane=
   if command -v cmux >/dev/null && [ -n "${CMUX_WORKSPACE_ID:-}" ]; then
-    local lp; lp=$(_lead_pane 2>/dev/null || true)
-    leadpane="${lp%% *}"
+    if [ -n "${TEAM_LEAD_PANE:-}" ]; then
+      leadpane="$TEAM_LEAD_PANE"
+    else
+      local lp; lp=$(_lead_pane 2>/dev/null || true)
+      leadpane="${lp%% *}"
+    fi
   fi
 
   if [ -n "$watch" ]; then
@@ -217,8 +225,22 @@ sub_monitor() {
   case ${interval:-} in *[!0-9]*|'') interval=30 ;; esac
   local title="$team-monitor"
 
-  # Fix 4: single-instance guard — refuse only when the existing pane is LIVE.
-  # If the row exists but the surface is dead (manually closed), prune and proceed.
+  # Capture lead's pane_ref NOW (running as the lead).
+  # Baked into the status loop so PARKED/PROMPT detection is correct inside the
+  # monitor pane (where _lead_pane would otherwise resolve to the monitor itself).
+  local lead_pane=
+  if command -v cmux >/dev/null && [ -n "${CMUX_WORKSPACE_ID:-}" ]; then
+    local lp; lp=$(_lead_pane 2>/dev/null || true)
+    lead_pane="${lp%% *}"
+  fi
+  local lead_pane_q; lead_pane_q=$(printf '%q' "$lead_pane")
+
+  # Acquire registry lock: makes single-instance check + append atomic vs spawn.
+  # _lock sets an EXIT trap for cleanup; do NOT set another EXIT trap after this.
+  _lock "$reg"
+
+  # Single-instance guard: refuse if a live dash row with this title exists.
+  # Dead rows (pane manually closed) are pruned so a fresh monitor can open.
   if [ -f "$reg" ]; then
     local ex_row
     ex_row=$(awk -v t="$title" '$4==t && $3=="dash"{print $0; exit}' "$reg" 2>/dev/null || true)
@@ -231,9 +253,10 @@ sub_monitor() {
         printf '  Stop it first: team.sh close %q\n' "$team" >&2
         return 1
       else
-        # Dead row: prune it and allow a fresh spawn
-        local tmp; tmp=$(mktemp)
-        awk -v t="$title" '!($4==t && $3=="dash")' "$reg" > "$tmp" && mv "$tmp" "$reg" || true
+        # Dead row: prune in-place (named temp avoids mktemp; no EXIT trap conflict)
+        local prunetmp="$reg.pruning-$$"
+        awk -v t="$title" '!($4==t && $3=="dash")' "$reg" > "$prunetmp" \
+          && mv "$prunetmp" "$reg" || rm -f "$prunetmp"
       fi
     fi
   fi
@@ -243,11 +266,13 @@ sub_monitor() {
   #     evaluates it each loop iteration (not at assignment time).
   # N11: while [ -f <reg> ] exits automatically when the team is closed
   #      (close removes the registry), leaving no orphan process.
+  # TEAM_LEAD_PANE is baked in so sub_status inside the loop uses the lead's pane
+  # rather than the monitor pane's own pane_ref for PARKED/PROMPT detection.
   local reg_q; reg_q=$(printf '%q' "$reg")
   local team_q; team_q=$(printf '%q' "$team")
   local script_q; script_q=$(printf '%q' "$here/team.sh")
   # shellcheck disable=SC2016  # intentional: \$() must not expand at assignment
-  local cmd="while [ -f $reg_q ]; do clear; printf 'team %s -- %s\\n' $team_q \"\$(date '+%H:%M:%S')\"; bash $script_q status $team_q; sleep $interval; done"
+  local cmd="while [ -f $reg_q ]; do clear; printf 'team %s -- %s\\n' $team_q \"\$(date '+%H:%M:%S')\"; TEAM_LEAD_PANE=$lead_pane_q bash $script_q status $team_q; sleep $interval; done"
 
   if [ -n "${CMUX_WORKSPACE_ID:-}" ] && command -v cmux >/dev/null; then
     local out ref
