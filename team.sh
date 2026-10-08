@@ -72,7 +72,7 @@
 # --tabs: one tab per teammate in the lead's workspace instead. --tmux was removed (cmux only): exit 2.
 # Permission mode: a haiku-tier model (by resolved tier, so any id that behaves as haiku) always
 # gets --permission-mode dontAsk plus a per-teammate allowlist: Read/Glob/Grep, SendMessage,
-# `git status` (diff/log/show can write via --output), ls/wc, `team.sh facts-lint`, and Edit on exactly its
+# `git status` (diff/log/show can write via --output), ls/wc, `team.sh facts-lint`, `cmux notify --title ...`, and Edit on exactly its
 # <run>/reports/<role>.md, <run>/tasks.md and <run>/status/<role>.txt (<run> = parent of the
 # prompt file's prompts/ dir, which a haiku-tier prompt must live in). Haiku tier is refused with
 # --worktree. With no [model], the tier is that of the default model the teammate starts on
@@ -721,6 +721,10 @@ if [ "$tier" = haiku ]; then
   allow+=",Bash(bash ~/.claude/skills/team/team.sh facts-lint:*),Bash(bash $here/team.sh facts-lint:*)"
   # Only `git status`: diff/log/show take --output=<file> (writes, live-probed); read code with Read/Grep/Glob.
   allow+=",Bash(git status:*)"
+  # teammate-rules.md has every teammate `cmux notify --title ... --body ...` when it reports or needs
+  # input (ring + badge; the command writes no files). The prefix starts at --title so a bare
+  # `--clear` or `--workspace`/`--surface` first is denied; a prefix rule cannot forbid later flags.
+  allow+=",Bash(cmux notify --title:*)"
   pmode=dontAsk
   echo "note: $title is haiku-tier (${model:-$dmodel}): --permission-mode dontAsk + read-only allowlist" >&2
 else
