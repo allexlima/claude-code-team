@@ -186,24 +186,29 @@ team. Requires cmux; skipped under --inline.
 - Build-run worktrees are pre-trusted, so they no longer prompt. A folder you have
   never opened with Claude can still show a trust prompt the first time.
 - `.team/runs/<date>-<team>/tasks.md` tracks each role's status.
-- Run `team.sh status <team>` to see each teammate's state (spawned → investigating →
-  drafting → reported), current step, time since last activity, and flags. Rows that need
-  you are pinned in a `NEEDS YOU` block above the table, which appears only when something
-  needs you. State is read from the hooks cmux injects into each *live* teammate, not from
-  its screen. A finished teammate has no surface, so its state comes from its report on
-  disk and the registry.
-    STALLED?     No update in a while — check its pane or message it
-    WAITING      AskUserQuestion notification detected — teammates must not use this;
+- Run `team.sh status <team>` to see one frame: a summary line (`<team> · N/M reported ·
+  time`), a progress bar, and a table of ROLE · STATE · STEP · AGE. Each state is a symbol
+  plus a word, so colour is never the only cue; colour is off when output is not a terminal,
+  `NO_COLOR` is set or `TERM=dumb`, and symbols fall back to ASCII in a non-UTF-8 locale.
+  A `NEEDS YOU` block is pinned above the table only when a teammate is in one of the first
+  four states below; the STEP column is dropped below 60 columns.
+    waiting      AskUserQuestion notification detected — teammates must not use this;
                  look at its pane and SendMessage it to send NEEDS INPUT to the lead instead.
-                 Not shown for haiku/dontAsk tier.
-                 A tool-permission prompt is NOT flagged (only STALLED? later) — see the
-                 known limitation above.
-    MODEL_GONE   Its model is no longer available — respawn with a different model
-    DEAD         Session exited without a report — respawn it
-    UNKNOWN      Not opened in cmux, so its state cannot be read
-  The status pane opens automatically (unless `--no-monitor`) and refreshes every 30 s
-  (override with `TEAM_STATUS_INTERVAL`). Requires cmux. Under `--inline` there is no
-  registry and no pane; track teammates by their returned reports and tasks.md.
+                 Not detected for haiku/dontAsk tier.
+    model gone   Its model is no longer available — respawn with a different model
+    dead         Session exited — respawn it (a note says when its report is safe on disk)
+    stalled?     Mid-work with no status or report write for 10 minutes — check its pane
+    working      Doing its work (a note says "report on disk" once it has reported)
+    idle         Turn ended with no report yet; routine while it waits on a peer
+    unknown      Not opened in cmux, so its state cannot be read
+    finished     Reported, verified and closed by the lead
+  State is read from the hooks cmux injects into each *live* teammate, not from its screen.
+  A finished teammate has no surface, so its state comes from its report on disk and the
+  registry.
+  The status pane opens automatically (unless `--no-monitor`) and repaints only when the
+  frame changes, checking every 30 s (override with `TEAM_STATUS_INTERVAL`). It exits when
+  the team is closed. Requires cmux. Under `--inline` there is no registry and no pane; track
+  teammates by their returned reports and tasks.md.
 - Say "shut down the team" to close all teammate panes/tabs (the run record stays;
   clean worktrees are removed, branches and PRs stay).
 
