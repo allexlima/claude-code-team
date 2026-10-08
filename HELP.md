@@ -96,6 +96,18 @@ forces one model everywhere; a haiku-tier id puts every role in dontAsk and is r
 - Writes in caveman style (https://github.com/JuliusBrussee/caveman) to save tokens;
   code, paths and errors unchanged. The lead's summary to you stays normal prose.
 
+## Later rounds: resumed teammates
+A finished teammate's session id is recorded, so a later round tries to resume that session
+(it keeps its full context) and falls back to a fresh teammate that reads its earlier report.
+Known behaviour to expect:
+- **Edits to `teammate-rules.md` do not reach a resumed teammate.** Claude records the system
+  prompt on the first request and replays it on resume; a changed prompt file is ignored with
+  no error or warning. Anything a resumed teammate must be told differently goes in the lead's
+  message to it. A fresh teammate does read the current rules.
+- The permission mode is re-applied on resume (verified for `--permission-mode`; that the
+  haiku-tier `--allowedTools` allowlist also re-applies is inferred, not observed).
+- Resuming a build-run teammate after `team.sh clean` removed its worktree is untested.
+
 ## Project memory: .team/
 Created at the project root on first run (git-ignored, along with CLAUDE.local.md;
 a one-time pointer note is added to CLAUDE.local.md — never to CLAUDE.md):
