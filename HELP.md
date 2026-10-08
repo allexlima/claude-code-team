@@ -21,9 +21,10 @@ and writes the final synthesis.
     --no-caveman     Teammates write normal prose instead of caveman terse style
     --autoclose      Close the team right after the final synthesis
     --inline         No panes: teammates run as in-session subagents
-    --monitor        Open a small auto-refreshing status pane showing each teammate's
-                     milestone, current step, and flags (STALLED?/PROMPT/PARKED).
+    --monitor        Open an auto-refreshing status tab showing each teammate's
+                     milestone, current step, and flags (STALLED?/MODEL_GONE/DEAD/PARKED/PROMPT).
                      Not counted toward the teammate cap; closed with the team.
+                     Ignored under --inline (no tab/pane to open; use team.sh status).
     --help           Show this help
 
 ## Before spawning
@@ -53,8 +54,8 @@ the best model id for that tier on this machine (newest version within the `clau
 family; GLM / Kimi only by explicit full id). Cheap-tier (haiku) teammates run
 unattended in `dontAsk` mode with a read-only tool allowlist on review runs — denied
 tools show up in their report. They are not used for build runs (editing + committing).
-Subagents launched by teammates default to Sonnet unless the teammate specifies
-otherwise. The roster you approve shows each role's model, so you can change any of
+Subagents launched by teammates default to Sonnet when available, unless the teammate
+specifies otherwise. The roster you approve shows each role's model, so you can change any of
 them before spawning, and the run record notes what each role ran on. An unrecognised
 model is refused up front rather than opening a pane on a dead session. `--model`
 forces one model everywhere.
@@ -99,9 +100,15 @@ Shared role library: `~/.claude/team/roles/` (outside any repo; make it a privat
 repo to sync machines). `team.sh role-pull <name>` brings a shared role into this
 project; `team.sh role-promote <name>` publishes a project role to the shared library
 (shows a diff and scans for secrets/PII before copying). `team.sh roles` lists all
-available roles with a status column (in-sync / local-ahead / global-ahead / diverged)
-so you can see which project roles differ from the library. On a new machine the shared
-library starts empty until you sync it.
+available roles with a status column:
+    in-sync          Project and library copies are identical
+    local-ahead      Project copy has changes not in the library (promote candidate)
+    global-ahead     Library is newer — run role-pull before promoting
+    diverged         Both differ from the saved base — show both diffs before deciding
+    diverged (no base)  Both differ but no saved base for comparison
+    project-only     Role exists in the project but not in the library (promote to add it)
+    library-only     Role exists in the library but not in this project (pull to add it)
+On a new machine the shared library starts empty until you sync it.
 
 ## Where teammates appear
     In cmux (default)   Your tab splits: you on the left, teammates in a two-column
@@ -131,10 +138,16 @@ library starts empty until you sync it.
 - Build-run worktrees are pre-trusted, so they no longer prompt. A folder you have
   never opened with Claude can still show a trust prompt the first time.
 - `.team/runs/<date>-<team>/tasks.md` tracks each role's status.
-- Run `team.sh status <team>` to see each teammate's milestone (spawned / investigating /
-  drafting / reported), current step, time since last activity, and flags (STALLED? /
-  PROMPT / PARKED / DEAD). With `--monitor`, this view opens automatically in a pane and
-  refreshes every 30 s (override with `TEAM_STATUS_INTERVAL`).
+- Run `team.sh status <team>` to see each teammate's milestone
+  (spawned → investigating → drafting → reported → challenged),
+  current step, time since last activity, and flags:
+    STALLED?     No update in a while — check its pane or message it
+    MODEL_GONE   Its model is no longer available — respawn with a different model
+    DEAD         Session exited — respawn it
+    PARKED       Folded into a tab; session is still running
+    PROMPT       Waiting for tool approval in its pane (never shown for haiku/GLM/Kimi or parked)
+  With `--monitor`, this view opens automatically in a status tab and refreshes every 30 s
+  (override with `TEAM_STATUS_INTERVAL`).
 - Say "shut down the team" to close all teammate panes/tabs (the run record stays;
   clean worktrees are removed, branches and PRs stay).
 
