@@ -23,7 +23,7 @@ and writes the final synthesis.
     --inline         No panes: teammates run as in-session subagents (no cmux required)
     --monitor        Open an auto-refreshing status pane showing each teammate's milestone,
                      current step, and flags. Not counted toward the teammate cap; closed
-                     with the team. Ignored under --inline (no registry to read).
+                     with the team. Requires cmux; ignored under --inline.
     --help           Show this help
 
 ## Before spawning
@@ -125,17 +125,21 @@ On a new machine the shared library starts empty until you sync it.
 
 ## Progress (cmux sidebar)
 The lead workspace shows a live status pill and progress bar: phase (spawning /
-working / challenge / synthesizing) and "N/M reported". Events are logged to the
-cmux event stream so you can scroll back. A badge and ring light up when any
-teammate reports or sends a question — the notification comes from `cmux notify`
-inside that teammate. `--monitor` adds a detailed status pane (see below).
+working / done) and "N/M reported". Events are logged to the cmux event stream
+(`cmux log --source team`) so you can scroll back. A badge and ring light up when
+any teammate reports or sends a question — the notification fires from `cmux notify`
+inside that teammate. The lead calls `team.sh sync <team>` to update the sidebar;
+`team.sh sync --clear <team>` removes it when the team closes. `--monitor` adds a
+detailed status pane (see below).
 
-## Cleanup: team.sh reap [--yes]
-At the start of every run the lead lists any leftover teammates from earlier runs
-of this project and asks you to confirm before closing them. You can also run
-`team.sh reap` at any time to see the list, or `team.sh reap --yes` to close them
-without prompting. Only teammates whose registry row records this project's root are
-touched; live teams in other projects are never affected.
+## Cleanup: team.sh reap [--yes] [--exclude <team>]
+At the start of every run the lead lists leftover teammates from earlier runs of
+this project and asks you to confirm before closing them. Rows marked "(run started
+today: may be live in another lead session)" require extra care — you may want to
+check before closing. Registries without a project root are left alone and counted
+in a summary line. You can also run `team.sh reap` at any time to see the list, or
+`team.sh reap --yes` to close without prompting. `--exclude <team>` skips the named
+team. Requires cmux; skipped under --inline.
 
 ## Examples
     /team review PR #42 for security, performance and test coverage
@@ -163,12 +167,15 @@ touched; live teams in other projects are never affected.
   (spawned → investigating → drafting → reported),
   current step, time since last activity, and flags:
     STALLED?     No update in a while — check its pane or message it
+    WAITING      Unread cmux notification (hook-detected): teammate is waiting for input;
+                 message it through the lead. Not shown for haiku/dontAsk tier or parked.
     MODEL_GONE   Its model is no longer available — respawn with a different model
     DEAD         Session exited — respawn it
     PARKED       Folded into a tab; session is still running
   With `--monitor`, this view opens automatically in a status pane and refreshes
-  every 30 s (override with `TEAM_STATUS_INTERVAL`).
-  Under `--inline` there is no registry; track teammates by their returned reports and tasks.md.
+  every 30 s (override with `TEAM_STATUS_INTERVAL`). Requires cmux.
+  Under `--inline`, `--monitor` is ignored; run `team.sh status <team>` yourself
+  or track teammates by their returned reports and tasks.md.
 - Say "shut down the team" to close all teammate panes/tabs (the run record stays;
   clean worktrees are removed, branches and PRs stay).
 
