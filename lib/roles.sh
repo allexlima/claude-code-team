@@ -11,7 +11,7 @@
 # sub_role <name>
 #   Print path of the role spec (project copy first, shared library fallback).
 #   Prints a note to stderr when resolving from the shared library.
-#   Exit 0: found. Exit 3: invalid name or not found.
+#   Exit 0: found. Exit 2: invalid name (bad input). Exit 3: not found.
 #
 # sub_roles
 #   List all available roles: <name>  <source>  <path>  <status>
@@ -23,7 +23,8 @@
 #   Fast-forwards when local is unchanged since base (base == local).
 #   Diverged (both changed): shows diffs, refuses unless --force.
 #   Exit 0: pulled / fast-forwarded / already up-to-date.
-#   Exit 3: invalid name, bad option, or not in shared library.
+#   Exit 2: invalid name or bad option (bad input, refused).
+#   Exit 3: not in shared library.
 #   Exit 5: conflict (pass --force to overwrite).
 #
 # sub_role_promote <name> [--force]
@@ -34,8 +35,8 @@
 #   run role-pull first; --force does NOT override this case (N13).
 #   Diverged (both changed): shows diffs, refuses unless --force.
 #   Exit 0: promoted / fast-forwarded / already up-to-date.
-#   Exit 2: secret/PII hit (hard gate; no file written).
-#   Exit 3: invalid name, bad option, or not in project.
+#   Exit 2: invalid name, bad option, or secret/PII hit (bad input, refused).
+#   Exit 3: not in project.
 #   Exit 5: conflict (pass --force to overwrite; not accepted for global-ahead).
 
 _validate_role_name() {
@@ -43,18 +44,18 @@ _validate_role_name() {
   case $name in
     ''|-*|*-|*--*|monitor)
       printf 'invalid role name: %s (kebab-case required; cannot be "monitor")\n' "${name:-<empty>}" >&2
-      return 3
+      return 2
       ;;
     *[!a-z0-9-]*)
       printf 'role names are kebab-case: %s\n' "$name" >&2
-      return 3
+      return 2
       ;;
   esac
 }
 
 sub_role() {
   local name=${1:-}
-  _validate_role_name "$name" || return 3
+  _validate_role_name "$name" || return $?
   local root; root=$(_root)
   local lib; lib=$(_roles_lib)
   if [ -f "$root/.team/roles/$name.md" ]; then
@@ -121,9 +122,9 @@ sub_role_pull() {
   local name=${1:-} force=
   shift 2>/dev/null || true
   while [ $# -gt 0 ]; do
-    case $1 in --force) force=1; shift ;; *) echo "role-pull: unknown option: $1" >&2; return 3 ;; esac
+    case $1 in --force) force=1; shift ;; *) echo "role-pull: unknown option: $1" >&2; return 2 ;; esac
   done
-  _validate_role_name "$name" || return 3
+  _validate_role_name "$name" || return $?
 
   local root; root=$(_root)
   local lib; lib=$(_roles_lib)
@@ -188,9 +189,9 @@ sub_role_promote() {
   local name=${1:-} force=
   shift 2>/dev/null || true
   while [ $# -gt 0 ]; do
-    case $1 in --force) force=1; shift ;; *) echo "role-promote: unknown option: $1" >&2; return 3 ;; esac
+    case $1 in --force) force=1; shift ;; *) echo "role-promote: unknown option: $1" >&2; return 2 ;; esac
   done
-  _validate_role_name "$name" || return 3
+  _validate_role_name "$name" || return $?
 
   local root; root=$(_root)
   local lib; lib=$(_roles_lib)

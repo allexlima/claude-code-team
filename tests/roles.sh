@@ -44,8 +44,8 @@ write_role() {  # write_role <dir> <name> <content>
 # ---------------------------------------------------------------------------
 for bad in '' '-leading' 'trailing-' 'a--b' 'monitor'; do
   _validate_role_name "$bad" 2>/dev/null && rc=0 || rc=$?
-  [ $rc = 3 ] && pass "_validate_role_name: rejects '$bad'" \
-    || fail "_validate_role_name: rejects '$bad'" "rc=$rc"
+  [ $rc = 2 ] && pass "_validate_role_name: rejects '$bad' (exit 2)" \
+    || fail "_validate_role_name: rejects '$bad' (exit 2)" "rc=$rc"
 done
 for good in 'a' 'my-role' 'abc123' 'role-v2'; do
   _validate_role_name "$good" 2>/dev/null && rc=0 || rc=$?
@@ -82,12 +82,12 @@ out=$(sub_role gone 2>&1) && rc=0 || rc=$?
   || fail "sub_role: exit 3 when not found" "rc=$rc"
 
 out=$(sub_role "bad name" 2>&1) && rc=0 || rc=$?
-[ $rc = 3 ] && pass "sub_role: exit 3 on non-kebab name" \
-  || fail "sub_role: exit 3 on non-kebab name" "rc=$rc"
+[ $rc = 2 ] && pass "sub_role: exit 2 on non-kebab name (bad input)" \
+  || fail "sub_role: exit 2 on non-kebab name (bad input)" "rc=$rc"
 
 out=$(sub_role "monitor" 2>&1) && rc=0 || rc=$?
-[ $rc = 3 ] && pass "sub_role: exit 3 on reserved name 'monitor' (N10)" \
-  || fail "sub_role: exit 3 on reserved name 'monitor' (N10)" "rc=$rc"
+[ $rc = 2 ] && pass "sub_role: exit 2 on reserved name 'monitor' (N10, bad input)" \
+  || fail "sub_role: exit 2 on reserved name 'monitor' (N10, bad input)" "rc=$rc"
 
 # ---------------------------------------------------------------------------
 # 3. sub_roles — status column
@@ -199,12 +199,12 @@ out=$(sub_role_pull notexist 2>&1) && rc=0 || rc=$?
 [ $rc = 3 ] && pass "sub_role_pull: exit 3 when not in library" \
   || fail "sub_role_pull: exit 3" "rc=$rc"
 
-# exit 3 on bad option
+# exit 2 on bad option (bad input, refused)
 setup
 write_role "$W/lib" myrole "# ok"
 out=$(sub_role_pull myrole --no-such-flag 2>&1) && rc=0 || rc=$?
-[ $rc = 3 ] && pass "sub_role_pull: exit 3 on unknown option" \
-  || fail "sub_role_pull: exit 3 unknown option" "rc=$rc"
+[ $rc = 2 ] && pass "sub_role_pull: exit 2 on unknown option (bad input)" \
+  || fail "sub_role_pull: exit 2 unknown option" "rc=$rc"
 
 # ---------------------------------------------------------------------------
 # 5. sub_role_promote
