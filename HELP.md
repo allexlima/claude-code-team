@@ -167,9 +167,11 @@ team. Requires cmux; skipped under --inline.
   (spawned → investigating → drafting → reported),
   current step, time since last activity, and flags:
     STALLED?     No update in a while — check its pane or message it
-    WAITING      AskUserQuestion notification detected: teammate is waiting for input;
-                 message it through the lead. Not shown for haiku/dontAsk tier or parked.
-                 A permission prompt is NOT flagged here (check the cmux tab badge instead).
+    WAITING      AskUserQuestion notification detected — teammates must not use this;
+                 show the pane and SendMessage it to send NEEDS INPUT to the lead instead.
+                 Not shown for haiku/dontAsk tier or parked.
+                 A tool-permission prompt is NOT flagged (only STALLED? later) — show
+                 the pane so the user can approve in it.
     MODEL_GONE   Its model is no longer available — respawn with a different model
     DEAD         Session exited — respawn it
     PARKED       Folded into a tab; session is still running
