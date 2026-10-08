@@ -274,7 +274,8 @@ _reg_add() {
 # (`team.sh finish`), its pane is gone by design, and the row holds the session id to resume from.
 _finished() { [ "$(awk '{print $9}' <<<"$1")" = finished ]; }
 # A report's last mandatory section header (plain, bold or heading markdown); `finish` counts these.
-_trailer='^[#*> _-]*PARALLELISM:'
+# No `>`: a blockquoted PARALLELISM: is a peer's report being quoted, not this teammate's trailer.
+_trailer='^[#*_ -]*PARALLELISM:'
 # Project root of a row (col 7 run dir, col 8 root), as a physical path, or nothing when unknown.
 # Rows older than rev4 have no root: derive it from a run dir under <root>/.team/runs/.
 _row_root() {
@@ -656,8 +657,13 @@ if [ "$sub" = finish ]; then
         # Fail closed: a git status that cannot run is treated as "maybe dirty".
         dirty=$(git -C "$cwd" status --porcelain 2>&1) || {
           echo "finish: refused: cannot check worktree $cwd for uncommitted changes: $dirty" >&2; exit 2; }
+        # Untracked files count: a new source file not yet committed is unfinished work. The paths are
+        # named so the lead can tell scratch from real work.
         [ -z "$dirty" ] || {
-          echo "finish: refused: worktree $cwd has uncommitted changes; finishing force-kills the session and the code would be lost. Have $title commit first." >&2; exit 2; } ;;
+          echo "finish: refused: worktree $cwd has uncommitted changes (untracked files included); $title has not finished committing. Have it commit, or remove scratch files:" >&2
+          printf '%s\n' "$dirty" | head -5 | sed 's/^/  /' >&2
+          [ "$(printf '%s\n' "$dirty" | wc -l)" -le 5 ] || echo "  ... $(( $(printf '%s\n' "$dirty" | wc -l) - 5 )) more" >&2
+          exit 2; } ;;
     esac
     new_row="$b $ref $lay $title ${mdl:--} ${smdl:--} $rd ${rt:--} finished ${sid:--} $cwd"
     NEW_ROW=$new_row awk -v n="$n" 'NR==n {print ENVIRON["NEW_ROW"]; next} 1' "$reg" > "$reg.tmp" && mv "$reg.tmp" "$reg"
