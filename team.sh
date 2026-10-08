@@ -559,6 +559,12 @@ if submodel=$(_pick_model sonnet 2>/dev/null) && [ -n "$submodel" ]; then :; els
   echo "warn: no sonnet-tier model; CLAUDE_CODE_SUBAGENT_MODEL not set for $title" >&2
 fi
 
+if [ -n "$worktree" ]; then
+  root=$(_root)
+  git -C "$root" rev-parse -q --verify HEAD >/dev/null 2>&1 || {
+    echo "--worktree needs a git repo with at least one commit (none at $root)" >&2; exit 2; }
+fi
+
 # Prune + duplicate check + cap + register must not interleave with a parallel spawn of the
 # same team, or two spawns both see 7 teammates.
 _lock "$reg"
@@ -582,9 +588,6 @@ n_mates=$(_mates "$reg" | grep -c . || true)
 
 dir=$PWD
 if [ -n "$worktree" ]; then
-  root=$(_root)
-  git -C "$root" rev-parse -q --verify HEAD >/dev/null || {
-    echo "--worktree needs a repo with at least one commit (none at $root)" >&2; exit 2; }
   dir="$root/.team/worktrees/$team-$role"
   if [ ! -d "$dir" ]; then
     # `clean` keeps the branch, so a respawn reuses it instead of failing on `-b`.
