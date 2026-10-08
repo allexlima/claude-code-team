@@ -27,7 +27,7 @@ quote it word-for-word — they never restate it in their own words.
 2. Grep the repo for the old wording and update or delete the copies.
 3. Run `bash team.sh doccheck` — it flags retired drift phrases
    (`inherit the lead`, `stacked`, `3–5`, `--tmux`, `tmux pane`, `tmux session`,
-   `tmux attach`, and — once `rev5-core` adds it — `team.sh park`), confirms every subcommand is documented in the `team.sh` header,
+   `tmux attach` and `team.sh park`), confirms every subcommand is documented in the `team.sh` header,
    and confirms every `--flag` in `SKILL.md`'s argument-hint is explained in `HELP.md`.
    Fix what it reports.
 
@@ -36,3 +36,23 @@ Deterministic checks belong in a hook, not prose. `.githooks/pre-commit` runs
 `core.hooksPath` is already set (e.g. a Databricks secret-scanning hook —
 `git config --get core.hooksPath`), don't override it: run `bash team.sh doccheck`
 in CI or as a manual pre-push check so you keep the global hook.
+
+## The full gate set
+
+`doccheck` is the doc guard only. Before merging a branch, run all five suites
+from the main checkout with `TEAM_MEMBER` unset (an inherited value makes
+`rev4-3` fail for the wrong reason):
+
+```
+bash -n team.sh lib/*.sh
+bash team.sh doccheck
+bash tests/roles.sh
+bash tests/team-build.sh      # spawn/registry/close/reap
+bash tests/team-cli.sh        # secret regex, facts-lint
+bash tests/status-render.sh   # monitor frames, widths, colour gate
+bash tests/team-finish.sh     # finish guards, --resume, round baselines
+bash team.sh facts-lint       # CHECK rows are expected when cited files changed
+```
+
+Add a new suite to this list in the same commit that adds the file, or the next
+run's gates silently skip it.
