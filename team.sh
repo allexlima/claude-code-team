@@ -59,11 +59,13 @@
 # top-level, so it cannot inherit it).
 # spawn checks before opening anything: the prompt file is readable (made absolute), the role is
 # kebab-case (no leading, trailing or double hyphen) and not the reserved name `monitor`, and the model is listed. Under a lock it then
-# drops registry rows whose pane is gone, refuses a live teammate with the same title unless
-# --replace (which closes the old one first), and refuses a 9th teammate (exit 4). The monitor
+# drops registry rows whose pane is gone (finished rows are kept), refuses a live teammate with the same
+# title unless --replace (which closes the old one first), and refuses a 9th live teammate (exit 4).
+# A finished row with the same title is superseded by the new session and dropped. The monitor
 # pane (layout dash) does not count toward the 8.
 # Every pane/tab is titled <team>-<role> (Claude's own terminal-title updates are disabled so it sticks),
-# and the session is started as `claude --name <team>-<role>` with TEAM_MEMBER=<team>-<role> in its env.
+# and the session is started as `claude --session-id <uuid> --name <team>-<role>` with TEAM_MEMBER=<team>-<role>
+# in its env; the uuid is generated per spawn and recorded in the registry row.
 # Every teammate gets teammate-rules.md appended to its system prompt (parallelise with
 # subagents, verify what they return), plus the caveman output style unless --no-caveman.
 # Every teammate runs with CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=4, and with
@@ -80,8 +82,11 @@
 # default gets the same treatment. Every other tier uses TEAM_PERMISSION_MODE (default auto).
 # Spawned tabs/panes are recorded in $TEAM_REG_DIR/team-<team>.tabs (default /tmp; tests point it at a
 # scratch dir so they never read or rewrite live registries), one row each (written by _reg_add):
-# "cmux <ref> <layout:pane|tab|dash> <title> <model|-> <subagent-model|-> <run-dir|-> <project-root>".
-# Rows older than rev4 have no <project-root> (reap derives it from a <run-dir> under <root>/.team/runs/, else
+# "cmux <ref> <layout:pane|tab|dash> <title> <model|-> <subagent-model|-> <run-dir|-> <project-root>
+#  <state:live|finished> <session-id|-> <cwd>". <state> is `finished` once `finish` closed the teammate on
+# purpose: such a row is kept (prune, reap and close never drop it), holds no cap slot and does not block a
+# respawn; it is the record a resume reads its session id and cwd from. Rows older than rev5 stop at
+# <project-root> and count as live. Rows older than rev4 have no <project-root> (reap derives it from a <run-dir> under <root>/.team/runs/, else
 # treats it as unknown). Paths with whitespace never match a project root, so such rows are never reaped.
 set -euo pipefail
 # Dispatch: anything not listed is refused here, because an unknown word would
@@ -241,12 +246,17 @@ _require_cmux() {
 }
 # The lead's name in the workspace title, its tab title and the Claude session name.
 _lead_title() { echo "Main Board - $(basename "$(_root)")"; }
-# The one writer of registry rows: <ref> <layout> <title> <model|-> <submodel|-> <rundir|->, plus the
-# project root, which scopes `reap` to this project.
+# The one writer of registry rows: <ref> <layout> <title> <model|-> <submodel|-> <rundir|-> <session-id|-> <cwd>,
+# written as "cmux <ref> .. <rundir> <project-root> live <session-id> <cwd>". The project root (col 8) scopes
+# `reap`; cols 9-11 come after it because reap reads cols 7-8 by position. <cwd> is last so a path with
+# spaces still reads whole (`read ... cwd`), and it is where the session's transcript is keyed.
 _reg_add() {
   local team=$1; shift
-  echo "cmux $* $(_root)" >> "$(_reg "$team")"
+  echo "cmux $1 $2 $3 $4 $5 $6 $(_root) live $7 $8" >> "$(_reg "$team")"
 }
+# 0 when a registry row (whole line) carries the terminal marker: its teammate was finished on purpose
+# (`team.sh finish`), its pane is gone by design, and the row holds the session id to resume from.
+_finished() { [ "$(awk '{print $9}' <<<"$1")" = finished ]; }
 # Project root of a row (col 7 run dir, col 8 root), as a physical path, or nothing when unknown.
 # Rows older than rev4 have no root: derive it from a run dir under <root>/.team/runs/.
 _row_root() {
@@ -290,14 +300,15 @@ for path in paths:
 PY
 }
 # Drop registry rows whose pane is gone, so a reused slug or a dead teammate never holds a
-# cap slot, anchors the grid, or blocks a respawn with the same name.
+# cap slot, anchors the grid, or blocks a respawn with the same name. A finished row is kept:
+# its pane is gone on purpose, and it is the only record of the session id to resume.
 _reg_prune() {
   [ -f "$1" ] || return 0
   local keep="" row b r
   while IFS= read -r row; do
     read -r b r _ <<<"$row" || true
     [ -n "${r:-}" ] || continue
-    if _alive "$b" "$r"; then keep+="$row"$'\n'; fi
+    if _finished "$row" || _alive "$b" "$r"; then keep+="$row"$'\n'; fi
   done < "$1"
   printf '%s' "$keep" > "$1.tmp" && mv "$1.tmp" "$1"
 }
@@ -314,8 +325,9 @@ _lock() {
   done
   echo "registry lock busy: $lock (another spawn/monitor is running; remove it if not)" >&2; exit 4
 }
-# Distinct titles of teammate rows (layout pane|tab; the dash monitor is not a teammate).
-_mates() { [ -f "$1" ] || return 0; awk '$3=="pane" || $3=="tab" {print $4}' "$1" | sort -u; }
+# Distinct titles of live teammate rows (layout pane|tab; the dash monitor is not a teammate, and a
+# finished teammate has no session running, so neither holds one of the 8 slots).
+_mates() { [ -f "$1" ] || return 0; awk '($3=="pane" || $3=="tab") && $9!="finished" {print $4}' "$1" | sort -u; }
 
 # Libraries: functions only (sub_<name> per subcommand), sourced after the helpers they use,
 # so a missing lib only disables its own subcommands.
@@ -413,7 +425,7 @@ if [ "$sub" = reap ]; then
       [ "$(_row_root "${rd:-}" "${rt:-}")" = "$me" ] || ours=
     done < "$reg"
     [ "$any" = 1 ] || continue
-    keep="" failed=
+    keep="" failed= held=
     while IFS= read -r row; do
       read -r b r _ title _ _ rd rt _ <<<"$row" || true
       [ -n "${r:-}" ] || continue
@@ -426,22 +438,25 @@ if [ "$sub" = reap ]; then
         [ -z "$live" ] || unknown=$((unknown+1))
         continue
       fi
+      # A finished teammate has no pane to close; its row holds the session id, so it is kept.
+      if _finished "$row"; then keep+="$row"$'\n'; continue; fi
       [ -n "$live" ] || continue   # gone or ref reused: the row is stale and dropped on --yes
       found=1
       # The run dir name tells an earlier run from one another lead session started today.
       run=-; case ${rd:-} in */.team/runs/*) run=$(basename "$rd") ;; esac
       note=; case $run in "$today"-*) note=" (run started today: may be live in another lead session)" ;; esac
-      if [ -z "$yes" ]; then echo "$t  $title  cmux $r  run $run$note"; keep+="$row"$'\n'; continue; fi
+      if [ -z "$yes" ]; then echo "$t  $title  cmux $r  run $run$note"; keep+="$row"$'\n'; held=1; continue; fi
       err=$(cmux close-surface --surface "$r" --force 2>&1 >/dev/null) && err=
       case $err in *not_found*) err= ;; esac
       if [ -z "$err" ]; then echo "$t  $title  cmux $r  closed"
-      else echo "$t  $title  cmux $r  could not close: $err" >&2; keep+="$row"$'\n'; failed=1; fi
+      else echo "$t  $title  cmux $r  could not close: $err" >&2; keep+="$row"$'\n'; held=1; failed=1; fi
     done < "$reg"
     [ -n "$yes" ] && [ -n "$ours" ] || continue
     # Rewrite our registry under its lock (subshell: _lock's EXIT trap releases it per registry).
     ( _lock "$reg"; if [ -z "$keep" ]; then rm -f "$reg"; else printf '%s' "$keep" > "$reg"; fi )
-    # A fully reaped team must not leave its sidebar pill/progress behind (lib/status.sh; best-effort).
-    if [ -z "$keep" ] && declare -F sub_sync >/dev/null; then sub_sync --clear "$t" || true; fi
+    # A fully reaped team (only finished rows left, if any) must not leave its sidebar pill/progress
+    # behind (lib/status.sh; best-effort).
+    if [ -z "$held" ] && declare -F sub_sync >/dev/null; then sub_sync --clear "$t" || true; fi
     [ -z "$failed" ] || rc=1
   done
   [ "$found" = 1 ] || echo "reap: no live teammates left from earlier runs of $(basename "$me")"
@@ -479,10 +494,13 @@ if [ "$sub" = close ]; then
   # running process unless forced. A pane that is already gone counts as closed, and so does
   # a ref now held by a surface with another title (the ref was reused: never close it);
   # any other failure is reported and its row kept, so a re-run can retry it.
-  keep=""
+  # A finished row has no pane (its teammate was closed by `finish`) and is the only record of its
+  # session id, so it is kept and does not count as a failure.
+  keep="" failed=
   while IFS= read -r row; do
     read -r backend id _ title _ <<<"$row" || true
     [ -n "${id:-}" ] || continue
+    if _finished "$row"; then echo "kept finished $title (no pane; its session id stays for a resume)"; keep+="$row"$'\n'; continue; fi
     if [ "$backend" != cmux ]; then echo "dropped $backend $id ($title): only cmux panes are closed now; close it by hand"; continue; fi
     cur=$(awk -F'\t' -v x="$id" '$1==x {print $2; exit}' <<<"$titles")
     if [ -z "$cur" ]; then echo "closed cmux $id (already gone)"; continue; fi
@@ -490,12 +508,12 @@ if [ "$sub" = close ]; then
     err=$(cmux close-surface --surface "$id" --force 2>&1 >/dev/null) && err=
     case $err in *not_found*) err= ;; esac
     if [ -z "$err" ]; then echo "closed cmux $id"
-    else echo "could not close cmux $id: $err" >&2; keep+="$row"$'\n'; fi
+    else echo "could not close cmux $id: $err" >&2; keep+="$row"$'\n'; failed=1; fi
   done < "$reg"
   # Clear the lead sidebar pill/progress for this team (lib/status.sh); best-effort.
   if declare -F sub_sync >/dev/null; then sub_sync --clear "$team" || true; fi
   [ -z "$keep" ] && { rm -f "$reg"; exit 0; }
-  printf '%s' "$keep" > "$reg"; exit 1
+  printf '%s' "$keep" > "$reg"; [ -z "$failed" ] || exit 1; exit 0
 fi
 
 if [ "$sub" = models ]; then
@@ -751,15 +769,16 @@ _lock "$reg"
 
 _reg_prune "$reg"
 # A live teammate with this title would be a second session SendMessage cannot tell apart.
-live=$(awk -v t="$title" '$4==t {print $1" "$2}' "$reg" 2>/dev/null || true)
+# A finished row with this title is not live: the new session supersedes it (dropped below).
+live=$(awk -v t="$title" '$4==t && $9!="finished" {print $1" "$2}' "$reg" 2>/dev/null || true)
 if [ -n "$live" ]; then
   [ -n "$replace" ] || { echo "$title is already live ($(echo $live)); pass --replace to close it and respawn" >&2; exit 2; }
   while read -r b r; do
     [ "$b" != cmux ] || cmux close-surface --surface "$r" --force >/dev/null 2>&1 || true
     echo "replaced: closed $b $r ($title)"
   done <<<"$live"
-  awk -v t="$title" '$4!=t' "$reg" > "$reg.tmp" && mv "$reg.tmp" "$reg"
 fi
+if [ -f "$reg" ]; then awk -v t="$title" '$4!=t' "$reg" > "$reg.tmp" && mv "$reg.tmp" "$reg"; fi
 n_mates=$(_mates "$reg" | grep -c . || true)
 [ "$n_mates" -lt 8 ] || { echo "team $team already has $n_mates live teammates (cap 8); close or replace one first" >&2; exit 4; }
 
@@ -805,7 +824,9 @@ if [ -f "$rulesfile" ]; then cat "$rulesfile" >> "$sysprompt"; fi
 if [ -n "$caveman" ] && [ -f "$cavefile" ]; then printf '\n\n' >> "$sysprompt"; cat "$cavefile" >> "$sysprompt"; fi
 envs="CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1 CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=4 TEAM_MEMBER=$(printf %q "$title")"
 [ "$submodel" != - ] && envs+=" CLAUDE_CODE_SUBAGENT_MODEL=$(printf %q "$submodel")"
-cmd="cd $(printf %q "$dir") && $envs claude --name $(printf %q "$title") --permission-mode $(printf %q "$pmode")"
+# Our own session id, recorded in the registry, so a later round can `claude --resume` it.
+sid=$(python3 -c 'import uuid; print(uuid.uuid4())')
+cmd="cd $(printf %q "$dir") && $envs claude --session-id $sid --name $(printf %q "$title") --permission-mode $(printf %q "$pmode")"
 # One comma-joined value: the flag is variadic and would otherwise swallow the prompt.
 [ -n "$allow" ] && cmd+=" --allowedTools $(printf %q "$allow")"
 if [ -s "$sysprompt" ]; then cmd+=" --append-system-prompt-file $(printf %q "$sysprompt")"; fi
@@ -816,18 +837,19 @@ if [ "$layout" = pane ]; then
   # Two-column grid in the region right of the lead: #1 opens it, #2 sits beside
   # #1, and every later teammate splits down from the one two slots back. A 1-wide
   # stack gave each teammate 1/N of the screen height, which got unreadable fast.
-  n=$(awk '$3=="pane"{c++} END{print c+0}' "$reg" 2>/dev/null || echo 0)
+  # Finished rows have no pane, so only live ones anchor the grid.
+  n=$(awk '$3=="pane" && $9!="finished"{c++} END{print c+0}' "$reg" 2>/dev/null || echo 0)
   if [ "$n" -eq 0 ]; then
     out=$(cmux new-split right --surface "$CMUX_SURFACE_ID" --command "$cmd" --focus false)
   elif [ "$n" -eq 1 ]; then
-    out=$(cmux new-split right --surface "$(awk '$3=="pane"{print $2; exit}' "$reg")" --command "$cmd" --focus false)
+    out=$(cmux new-split right --surface "$(awk '$3=="pane" && $9!="finished"{print $2; exit}' "$reg")" --command "$cmd" --focus false)
   else
-    out=$(cmux new-split down --surface "$(awk '$3=="pane"{print $2}' "$reg" | sed -n "$((n-1))p")" --command "$cmd" --focus false)
+    out=$(cmux new-split down --surface "$(awk '$3=="pane" && $9!="finished"{print $2}' "$reg" | sed -n "$((n-1))p")" --command "$cmd" --focus false)
   fi
 else
   out=$(cmux new-surface --type terminal --workspace "$CMUX_WORKSPACE_ID" --command "$cmd" --focus false)
 fi
 ref=$(awk '{print $2}' <<<"$out")   # "OK surface:N ..."
 cmux rename-tab --surface "$ref" "$title" >/dev/null
-_reg_add "$team" "$ref" "$layout" "$title" "${model:--}" "$submodel" "$rundir"
+_reg_add "$team" "$ref" "$layout" "$title" "${model:--}" "$submodel" "$rundir" "$sid" "$dir"
 echo "cmux $layout $ref ($team-$role) in current workspace"
