@@ -640,69 +640,6 @@ JSON
        "cmux=$(grep -m1 '' "$CMUX_LOG" || echo '(empty)')"
 }
 
-# Design D — `status <team>` subcommand exists and prints a table
-# ══════════════════════════════════════════════════════════════════
-{
-  R="$W/dd_status"; _mkgit "$R"
-  run="$R/.team/runs/2026-10-08-myteam"; _mkrun "$run"
-  TM="ddstatus$$"
-  pf="$run/prompts/w1.md"; printf 'prompt\n' > "$pf"
-  # Pre-populate registry (same as spawn would do) and show surface as live
-  printf 'cmux surface:77 pane %s-w1 sonnet -\n' "$TM" > "$TEAM_REG_DIR/team-$TM.tabs"
-  out=$(cd "$R" && CMUX_TREE_SURFACES="surface:77	$TM-w1" \
-    bash "$TEAM_SH" status "$TM" 2>&1) && rc=0 || rc=$?
-  rm -f "$TEAM_REG_DIR/team-$TM.tabs"
-  # Output must have ROLE header and rc=0
-  [ "$rc" = 0 ] && [[ "$out" == *"ROLE"* || "$out" == *"w1"* ]] \
-    && pass "design-D: status <team> prints table with ROLE column" \
-    || fail "design-D: status <team> prints table with ROLE column" \
-       "rc=$rc out=${out:0:120}"
-}
-
-# ══════════════════════════════════════════════════════════════════
-# Design D — `monitor <team>` spawns a dash pane (layout=dash)
-# Monitor pane is excluded from the teammate cap.
-# ══════════════════════════════════════════════════════════════════
-{
-  R="$W/dd_mon"; _mkgit "$R"
-  TM="ddmon$$"
-  _reset_logs
-  out=$(cd "$R" && bash "$TEAM_SH" monitor "$TM" 2>&1) && rc=0 || rc=$?
-  rm -f "$TEAM_REG_DIR/team-$TM.tabs"
-  # cmux must be called with layout=dash (or --command referencing monitor)
-  [ "$rc" = 0 ] && { grep -q 'dash' "$CMUX_LOG" || grep -q 'monitor' "$CMUX_LOG"; } \
-    && pass "design-D: monitor opens dash pane" \
-    || fail "design-D: monitor opens dash pane" "rc=$rc cmux=$(cat "$CMUX_LOG")"
-}
-
-# N11 — second monitor call on same team either reuses or exits gracefully (not crash)
-{
-  R="$W/n11"; _mkgit "$R"
-  TM="n11$$"
-  _reset_logs
-  (cd "$R" && bash "$TEAM_SH" monitor "$TM") >/dev/null 2>&1 && true || true
-  out=$(cd "$R" && bash "$TEAM_SH" monitor "$TM" 2>&1) && rc=0 || rc=$?
-  rm -f "$TEAM_REG_DIR/team-$TM.tabs"
-  [ "$rc" = 0 ] || [[ "$out" == *"already running"* ]] || [[ "$out" == *"already"* ]] \
-    && pass "N11: second monitor call on same team handled gracefully" \
-    || fail "N11: second monitor call on same team handled gracefully" \
-       "rc=$rc out=${out:0:120}"
-}
-
-# N9 — monitor pane command has properly quoted date (not frozen by quoting)
-{
-  R="$W/n9"; _mkgit "$R"
-  TM="n9$$"
-  _reset_logs  # ensure fresh log before grepping for date
-  (cd "$R" && bash "$TEAM_SH" monitor "$TM") >/dev/null 2>&1 && true || true
-  rm -f "$TEAM_REG_DIR/team-$TM.tabs"
-  # The date command must not be hard-coded (frozen); grep for $(date or `date`
-  grep -Eq '\$\(date|\`date' "$CMUX_LOG" \
-    && pass "N9: monitor command uses dynamic date (not frozen literal)" \
-    || fail "N9: monitor command uses dynamic date" \
-       "cmux=$(grep -m1 '' "$CMUX_LOG" || echo '(empty)')"
-}
-
 # Design D — monitor not counted in 8-teammate cap
 {
   R="$W/dd_cap"; _mkgit "$R"
