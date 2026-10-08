@@ -39,6 +39,8 @@ case "$1" in
     case " $* " in *" --force "*) echo OK ;; *) echo "Error: confirmation_required" >&2; exit 1 ;; esac ;;
   identify)
     if [ -z "$surf" ]; then echo '{"caller":{"pane_ref":"pane-lead","surface_ref":"surface:lead"}}'; exit 0; fi
+    case " ${CMUX_ERR_REFS:-} " in *" $surf "*) echo "Error: timeout" >&2; exit 1 ;; esac
+    case " ${CMUX_NOTFOUND_REFS:-} " in *" $surf "*) echo "Error: not_found" >&2; exit 1 ;; esac
     case " ${CMUX_GONE_REFS:-} " in
       *" $surf "*) echo '{"caller":{"pane_ref":null}}' ;;
       *) case " ${CMUX_LEADPANE_REFS:-} " in
@@ -136,6 +138,17 @@ rm "$WT/uncommitted.txt"; TREE="surface:16	$T-w"; out=$(fin w); rc=$?
 { [ $rc = 0 ] && [ "$(col9 w)" = finished ]; } \
   && pass "F6b: once the worktree is clean, finish proceeds" || fail "F6b: clean worktree proceeds" "rc=$rc out=$out"
 
+fixture f6d; WT="$R/.team/worktrees/$T-w"; _git -C "$R" worktree add -q -b "team/$T-w" "$WT" HEAD
+WT=$(cd "$WT" && pwd -P); row surface:18 w live "$SID" "$WT"; report w; tick w
+echo scratch > "$WT/scratch-notes.txt"   # untracked only: no tracked change
+out=$(fin w); rc=$?
+{ [ $rc = 2 ] && [ "$(col9 w)" = live ]; } \
+  && pass "F6d: an UNTRACKED file in the worktree counts as dirty — finish refuses (decision 71)" \
+  || fail "F6d: untracked counts as dirty" "rc=$rc out=$out"
+grep -q 'scratch-notes.txt' <<<"$out" \
+  && pass "F6e: the refusal NAMES the offending path so the lead can tell scratch from real work (decision 71)" \
+  || fail "F6e: refusal names the path" "out=$out"
+
 fixture f6c; WT="$R/.team/worktrees/$T-w"; mkdir -p "$WT"   # under the worktrees dir but NOT a git worktree: git status fails
 row surface:17 w live "$SID" "$WT"; report w; tick w
 out=$(fin w); rc=$?
@@ -168,20 +181,36 @@ CLOSEFAIL=; TREE="surface:22	$T-w"; out=$(fin w); rc=$?
 fixture f10; report w; tick w; printf 'prompt\n' > "$RUN/prompts/w.md"
 tm env CMUX_TREE_SURFACES= bash "$TEAM_SH" spawn "$T" w "$RUN/prompts/w.md" sonnet >/dev/null 2>&1
 rnd="$TEAM_REG_DIR/team-$T-w.round"
-{ [ -f "$rnd" ] && grep -Eq '^[0-9]+ [0-9]+ [0-9]+$' "$rnd"; } \
-  && pass "F10a: spawn records '<bytes> <cksum>' of the existing report in the .round sidecar" \
+{ [ -f "$rnd" ] && grep -Eq '^[0-9]+ [0-9]+$' "$rnd" && [ "$(cut -d' ' -f2 "$rnd")" = 1 ]; } \
+  && pass "F10a: spawn records '<bytes> <PARALLELISM: line count>' of the existing report in the .round sidecar (decision 66)" \
   || fail "F10a: .round sidecar" "$(cat "$rnd" 2>&1)"
 ref=$(awk '{print $2}' "$REG" | head -1)
 TREE="$ref	$T-w"; out=$(fin w); rc=$?
-{ [ $rc = 2 ] && grep -q 'has not changed' <<<"$out" && [ "$(col9 w)" = live ]; } \
+{ [ $rc = 2 ] && grep -q 'did not grow' <<<"$out" && [ "$(col9 w)" = live ]; } \
   && pass "F10b: round 2 — finish refuses a report that did not grow since spawn" || fail "F10b: unchanged report" "rc=$rc out=$out"
 printf 'round 2 notes, still working\n' >> "$RUN/reports/w.md"
 out=$(fin w); rc=$?
 { [ $rc = 2 ] && grep -q 'PARALLELISM' <<<"$out" && [ "$(col9 w)" = live ]; } \
   && pass "F10c: round 2 — an append WITHOUT a new PARALLELISM: is refused (the old header does not count)" || fail "F10c: append w/o PARALLELISM" "rc=$rc out=$out"
+# F10c2 (decision 66): round-2 text inserted ABOVE the old trailer grows the file but adds no trailer
+cp "$RUN/reports/w.md" "$W/f10.saved"
+python3 - "$RUN/reports/w.md" <<'PYI'
+import sys; p=sys.argv[1]; t=open(p).read(); i=t.index("PARALLELISM:"); open(p,"w").write(t[:i]+"round 2 block inserted above the old trailer\n"+t[i:])
+PYI
+out=$(fin w); rc=$?
+{ [ $rc = 2 ] && [ "$(col9 w)" = live ]; } \
+  && pass "F10c2: a round-2 block inserted ABOVE the old PARALLELISM: line is refused — the trailer COUNT must rise (decision 66)" \
+  || fail "F10c2: insert-above bypass" "rc=$rc out=$out"
+# F10c3 (decision 73): quoting a peer's trailer (blockquote) is not this teammate's own trailer
+cp "$W/f10.saved" "$RUN/reports/w.md"; printf 'peer said:\n> PARALLELISM: 4 subagents\n' >> "$RUN/reports/w.md"
+out=$(fin w); rc=$?
+{ [ $rc = 2 ] && [ "$(col9 w)" = live ]; } \
+  && pass "F10c3: a quoted '> PARALLELISM:' line from a peer's report does not satisfy the guard (decision 73)" \
+  || fail "F10c3: blockquoted trailer counted" "rc=$rc col9=$(col9 w) out=$out"
+cp "$W/f10.saved" "$RUN/reports/w.md"
 printf 'PARALLELISM: 2 subagents\n' >> "$RUN/reports/w.md"
 TREE="$ref	$T-w"; out=$(fin w); rc=$?
-{ [ $rc = 0 ] && [ "$(col9 w)" = finished ]; } \
+{ [ $rc = 0 ] && [ "$(col9 w)" = finished ] && ! grep -q 'already finished' <<<"$out"; } \
   && pass "F10d: round 2 — an append WITH a new PARALLELISM: is accepted" || fail "F10d: append with PARALLELISM" "rc=$rc out=$out"
 { [ "$(col9 w)" = finished ] && [ ! -f "$rnd" ]; } && pass "F10e: finish removes the .round sidecar once it succeeds" || fail "F10e: sidecar removed"
 
@@ -267,6 +296,20 @@ out=$(tm bash "$TEAM_SH" show "$T" b 2>&1); rc=$?
   || fail "F17: show focuses" "rc=$rc out=$out log=$(cat "$CMUX_LOG")"
 out=$(tm bash "$TEAM_SH" show "$T" a 2>&1); rc=$?
 [ $rc = 3 ] && pass "F17b: show on a finished teammate exits 3 (no pane to surface)" || fail "F17b: show finished" "rc=$rc out=$out"
+
+# ═══ F19: transient cmux failure is never "dead"/"gone" (decisions 62, 70) ═══
+fixture f19; row surface:95 a; row surface:96 b
+out=$(tm env CMUX_ERR_REFS="surface:95" CMUX_NOTFOUND_REFS="surface:96" bash "$TEAM_SH" list "$T" 2>&1); rc=$?
+{ ! grep -q "$T-a  dead" <<<"$out" && grep -q "$T-b  dead" <<<"$out"; } \
+  && pass "F19: list — 'Error: timeout' is NOT dead, a definite not_found still is (decisions 62, 70)" \
+  || fail "F19: list transient vs not_found" "rc=$rc out=$out"
+out=$(tm env CMUX_ERR_REFS="surface:95" bash "$TEAM_SH" show "$T" a 2>&1); rc=$?
+! grep -qi 'gone; respawn' <<<"$out" \
+  && pass "F19b: show — a transient failure never says 'is gone; respawn it' (decision 70: that sends the lead to kill a busy teammate)" \
+  || fail "F19b: show transient" "rc=$rc out=$out"
+out=$(tm env CMUX_NOTFOUND_REFS="surface:96" bash "$TEAM_SH" show "$T" b 2>&1); rc=$?
+{ [ $rc = 3 ] && grep -qi 'gone' <<<"$out"; } \
+  && pass "F19c: control — show on a definite not_found still says gone (exit 3)" || fail "F19c: show not_found" "rc=$rc out=$out"
 
 # ═══ F18: park is gone (decision 10) ═══
 out=$(tm bash "$TEAM_SH" park "$T" b 2>&1); rc=$?
