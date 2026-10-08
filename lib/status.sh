@@ -115,8 +115,9 @@ fi
 #   DEAD        surface gone without the marker
 #   MODEL_GONE  model (or subagent model) no longer offered
 #   WAITING     newest notification is an AskUserQuestion ("Claude question")
-#   IDLE        newest notification is "Completed in …" and no report on disk
 #   STALLED     mid-work milestone, no status/report write for >=10 min
+#   IDLE        newest notification is "Completed in …" and no report on disk
+#               (routine while waiting on a peer; after 10 silent min it is STALLED)
 #   WORKING     everything else (including "report on disk" while still alive)
 # ---------------------------------------------------------------------------
 _st_state() {
@@ -126,16 +127,17 @@ _st_state() {
   elif [ "$alive" != 1 ]; then echo DEAD
   elif [ -n "$gone" ]; then echo MODEL_GONE
   elif [ -n "$waiting" ]; then echo WAITING
-  elif [ -n "$idle" ]; then echo IDLE
   elif [ -n "$stalled" ]; then echo STALLED
+  elif [ -n "$idle" ]; then echo IDLE
   else echo WORKING
   fi
 }
 
 # ---------------------------------------------------------------------------
-# _st_row <row> <run> <leadpane> <team>: render one registry row as a table line
-# Detection only: gathers the facts, asks _st_state for the token, maps it back to
-# the FLAGS vocabulary. Reads module globals: _ST_UUID_MAP, _ST_NOTIF_DATA
+# _st_row <row> <run> <leadpane> <team>: one TAB-separated record per teammate
+#   role  title  state  milestone  step  age_min(-1 = none)  note
+# Detection only (decision 7): gathers the facts and asks _st_state for the token;
+# _st_frame does all layout. Reads module globals: _ST_UUID_MAP, _ST_NOTIF_DATA
 # ---------------------------------------------------------------------------
 _st_row() {
   local row="$1" run="$2" leadpane="$3" team="$4"
@@ -181,15 +183,15 @@ _st_row() {
     grep -qF -- "- [x] $title:" "$effective_run/tasks.md" 2>/dev/null && ms=reported
   fi
 
-  # ------ STEP (last line of status file, max 40 chars) -------------------
+  # ------ STEP (last line of status file; _st_frame truncates by display width)
   local step='-'
   if [ -n "$stf" ] && [ -f "$stf" ]; then
-    local raw; raw=$(tail -1 "$stf" 2>/dev/null | cut -c1-40) || true
+    local raw; raw=$(tail -1 "$stf" 2>/dev/null | tr '\t\r' '  ') || true
     step="${raw:--}"
   fi
 
   # ------ LAST_ACTIVITY (age of newest {report, status} mtime) ------------
-  local newest=0 la='-' age=0
+  local newest=0 age=-1
   local f t
   for f in "$rpt" "$stf"; do
     [ -n "$f" ] && [ -f "$f" ] || continue
@@ -199,7 +201,6 @@ _st_row() {
   if [ "$newest" -gt 0 ]; then
     local now; now=$(date +%s)
     age=$(( (now - newest) / 60 ))
-    la="${age}m ago"
   fi
 
   # ------ FACTS -----------------------------------------------------------
@@ -209,7 +210,7 @@ _st_row() {
   # STALLED: derived signals only; fires during mid-work milestones, silent >10m
   case $ms in
     spawned|investigating|drafting)
-      [ "$newest" -gt 0 ] && [ "$age" -ge 10 ] && stalled=1 ;;
+      [ "$age" -ge 10 ] && stalled=1 ;;
   esac
 
   # MODEL_GONE (N3): check main model col and subagent model col
@@ -271,27 +272,22 @@ _st_row() {
 
   local state; state=$(_st_state "$fin" "$backend" "$alive" "$gone" "$waiting" "$idle" "$stalled")
 
-  # Map the token back onto the FLAGS vocabulary
-  local flags=
-  case $state in
-    FINISHED)   flags=FINISHED ;;
-    DEAD)       flags=DEAD ;;
-    MODEL_GONE) flags=MODEL_GONE ;;
-    WAITING)    flags=WAITING ;;
-    IDLE)       flags=DONE ;;
-    STALLED)    flags='STALLED?' ;;
-  esac
-  [ -n "$parked" ] && flags="${flags:+$flags }PARKED"
+  # Notes: context a token alone cannot carry
+  local note=
+  if [ -n "$parked" ] && [ "$state" = WORKING ]; then note="in the lead's pane"
+  elif [ "$state" = WORKING ] && [ "$ms" = reported ]; then note="report on disk"
+  elif [ "$state" = DEAD ] && [ -n "$rpt" ] && [ -f "$rpt" ]; then note="report safe; resume unavailable"
+  fi
 
-  printf '%-18s %-14s %-42s %-14s %s\n' \
-    "$role" "$ms" "$step" "$la" "${flags:----}"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$role" "$title" "$state" "$ms" "$step" "$age" "$note"
 }
 
-# _st_table <reg> <run> <leadpane> <team>: header + one row per non-dash teammate
-_st_table() {
+# _st_records <reg> <run> <leadpane> <team>: one _st_row record per non-dash teammate
+# (deduplicated by title, last row wins). The single record source for the pane and
+# the sidebar, so N/M is counted the same way on both surfaces.
+_st_records() {
   local reg="$1" run="$2" leadpane="$3" team="$4"
-
-  printf '%-18s %-14s %-42s %-14s %s\n' ROLE MILESTONE STEP LAST_ACTIVITY FLAGS
 
   # Build surface ref → UUID map (single python3 call).
   # list-panes --json has surface_refs[] + surface_ids[] in parallel arrays.
@@ -381,7 +377,223 @@ except Exception:
 }
 
 # ---------------------------------------------------------------------------
+# Frame rendering: a pure function of records + width + colour + charset.
+# The python3 formatter measures display width (unicodedata.east_asian_width),
+# truncates on grapheme-cluster boundaries and paints the shared palette. Its
+# header carries the literal @@CLOCK@@ so frames compare equal across ticks.
+# ---------------------------------------------------------------------------
+
+read -r -d '' _ST_FRAME_PY <<'PY' || true
+import os, sys, unicodedata
+
+# argv: team width color(0|1) ascii(0|1); stdin: TSV records
+# role  title  state  milestone  step  age_min(-1 = none)  note
+team, width, color, ascii_ = sys.argv[1], int(sys.argv[2]), sys.argv[3] == '1', sys.argv[4] == '1'
+sys.stdin.reconfigure(encoding='utf-8', errors='replace')
+sys.stdout.reconfigure(encoding='ascii' if ascii_ else 'utf-8', errors='replace')
+
+PAL = {'alert': (0xFF, 0x45, 0x3A), 'active': (0xAF, 0x52, 0xDE),
+       'done': (0x30, 0xD1, 0x58), 'dim': (0x8E, 0x8E, 0x93)}
+#        token        utf8 ascii  word           role
+STATES = {'WAITING':   ('⏸', '!', 'waiting',     'alert'),
+          'MODEL_GONE':('⚠', '!', 'model gone',  'alert'),
+          'DEAD':      ('✗', 'x', 'dead',        'alert'),
+          'STALLED':   ('⧗', '~', 'stalled?',    'alert'),
+          'WORKING':   ('◐', '*', 'working',     'active'),
+          'IDLE':      ('◌', '-', 'idle',        'dim'),
+          'UNKNOWN':   ('?', '?', 'unknown',     'dim'),
+          'FINISHED':  ('✓', '+', 'finished',    'done')}
+ORDER = list(STATES)  # alerts first (most urgent first), then working, unknown, finished
+HINT = {'WAITING': 'answer it in its pane', 'MODEL_GONE': 'model no longer offered',
+        'DEAD': 'pane gone; respawn or check',
+        'STALLED': 'no update; maybe a permission prompt'}
+
+def paint(s, role):
+    if not color or not s:
+        return s
+    r, g, b = PAL[role]
+    return f'\x1b[38;2;{r};{g};{b}m{s}\x1b[0m'
+
+def cw(ch):
+    if unicodedata.combining(ch) or ch in '‍︎️' or unicodedata.category(ch) in ('Mn', 'Me', 'Cf'):
+        return 0
+    return 2 if unicodedata.east_asian_width(ch) in ('W', 'F') else 1
+
+def dw(s):
+    return sum(cw(c) for c in s)
+
+def clusters(s):
+    # A cluster is a base char plus following zero-width chars (combining marks, ZWJ
+    # and what it joins, variation selectors) — truncation never splits one.
+    out, join = [], False
+    for c in s:
+        if out and (cw(c) == 0 or join):
+            out[-1] += c
+        else:
+            out.append(c)
+        join = c == '‍'
+    return out
+
+def fit(s, w):
+    """Truncate to display width w (ellipsis included), then pad to exactly w."""
+    if w <= 0:
+        return ''
+    if dw(s) > w:
+        ell = '~' if ascii_ else '…'
+        acc = ''
+        for cl in clusters(s):
+            if dw(acc) + dw(cl) > w - 1:
+                break
+            acc += cl
+        s = acc + ell
+    return s + ' ' * (w - dw(s))
+
+def age(m):
+    m = int(m)
+    if m < 0:
+        return '-'
+    return f'{m}m' if m < 60 else f'{m // 60}h{m % 60:02d}m'
+
+def asciify(s):
+    # Non-UTF-8 locale: fold accents (ç -> c), replace anything else with '?' so the
+    # width measured is the width printed.
+    s = ''.join(c for c in unicodedata.normalize('NFKD', s) if not unicodedata.combining(c))
+    return ''.join(c if ord(c) < 128 else '?' for c in s)
+
+recs = []
+for line in sys.stdin:
+    if ascii_:
+        line = asciify(line)
+    f = line.rstrip('\n').split('\t')
+    if len(f) < 7 or f[2] not in STATES:
+        continue
+    recs.append(dict(role=f[0], title=f[1], state=f[2], ms=f[3], step=f[4], age=age(f[5]), note=f[6]))
+
+def sym(st):
+    u, a, word, role = STATES[st]
+    return (a if ascii_ else u), word, role
+
+total = len(recs)
+done = sum(1 for r in recs if r['ms'] == 'reported' or r['state'] == 'FINISHED')
+sep = ' - ' if ascii_ else ' · '
+out = [f'{team}{sep}{done}/{total} reported{sep}@@CLOCK@@']
+barw = max(5, min(20, width - 8))
+filled = (barw * done // total) if total else 0
+pct = (100 * done // total) if total else 0
+full, empty = ('#', '-') if ascii_ else ('█', '░')
+out.append(paint(full * filled, 'done') + paint(empty * (barw - filled), 'dim') + f'  {pct}%')
+out.append('')
+
+alerts = [r for r in recs if STATES[r['state']][3] == 'alert']
+rest = [r for r in recs if STATES[r['state']][3] != 'alert']
+alerts.sort(key=lambda r: ORDER.index(r['state']))
+rest.sort(key=lambda r: ORDER.index(r['state']))
+rolew = min(18, max([dw(r['role']) for r in recs] + [4]))
+
+if alerts:
+    hdr = ('!' if ascii_ else '⚠') + f' NEEDS YOU ({len(alerts)})'
+    out.append(paint(hdr, 'alert'))
+    agew = max(dw(r['age']) for r in alerts)
+    for r in alerts:
+        s, word, role = sym(r['state'])
+        detail = r['note'] or (r['step'] if r['step'] != '-' else '') or HINT[r['state']]
+        msg = f'{word}{sep}{detail}'
+        msgw = width - (4 + 2 + rolew + 2 + 2 + agew)
+        line = '    ' + paint(s, 'alert') + ' ' + fit(r['role'], rolew) + '  '
+        line += (fit(msg, msgw) + '  ' if msgw >= 8 else '') + r['age'].rjust(agew)
+        out.append(line.rstrip())
+    out.append('')
+
+if rest:
+    def label(r):
+        s, word, _ = sym(r['state'])
+        if r['state'] == 'WORKING' and r['ms'] in ('spawned', 'investigating', 'drafting'):
+            word = r['ms']
+        return s, word
+    labels = [label(r) for r in rest]
+    statew = max([dw(s + ' ' + w) for s, w in labels] + [5])
+    agew = max([dw(r['age']) for r in rest] + [3])
+    stepw = width - (4 + rolew + 2 + statew + 2 + 2 + agew)
+    show_step = width >= 60 and stepw >= 8
+    head = '    ' + fit('ROLE', rolew) + '  ' + fit('STATE', statew) + '  '
+    head += (fit('STEP', stepw) + '  ' if show_step else '') + 'AGE'.rjust(agew)
+    out.append(paint(head.rstrip(), 'dim'))
+    for r, (s, word) in zip(rest, labels):
+        role = STATES[r['state']][3]
+        step = r['step']
+        if r['note']:
+            step = r['note'] if step == '-' else f"{r['note']}{sep}{step}"
+        line = '  ' + ('-' if ascii_ else '·') + ' ' + fit(r['role'], rolew) + '  '
+        line += paint(s, role) + ' ' + fit(word, statew - dw(s) - 1) + '  '
+        line += (fit(step, stepw) + '  ' if show_step else '') + r['age'].rjust(agew)
+        out.append(line.rstrip())
+
+print('\n'.join(out))
+PY
+
+# _st_cols: terminal width. TEAM_COLS wins (tests), else `tput cols` — never $COLUMNS,
+# which is 0 in non-interactive bash. tput prints 80 when stdout is not a tty.
+_st_cols() {
+  local c=${TEAM_COLS:-}
+  case $c in ''|*[!0-9]*) c=$(tput cols 2>/dev/null || true) ;; esac
+  case $c in ''|*[!0-9]*) c=80 ;; esac
+  [ "$c" -lt 20 ] && c=20
+  [ "$c" -gt 400 ] && c=400
+  echo "$c"
+}
+
+# _st_color_on: 0 when colour applies. Evaluate where stdout is the real output,
+# never inside $(...), where [ -t 1 ] is always false.
+_st_color_on() {
+  [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != dumb ] \
+    && { [ -t 1 ] || [ "${TEAM_FORCE_COLOR:-}" = 1 ]; }
+}
+
+# _st_ascii: 0 when the locale is not UTF-8 (first of LC_ALL, LC_CTYPE, LANG set wins)
+_st_ascii() {
+  local loc=${LC_ALL:-${LC_CTYPE:-${LANG:-}}}
+  case $loc in *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) return 1 ;; esac
+  return 0
+}
+
+# _st_frame <team> <cols> <color 0|1> <ascii 0|1>: records on stdin -> frame on stdout
+_st_frame() {
+  python3 -I -c "$_ST_FRAME_PY" "$@"
+}
+
+# _st_collect <team>: resolve run dir + lead pane, print the team's records.
+# Exit 3 when the team has no registry.
+_st_collect() {
+  local team=$1
+  local reg; reg=$(_reg "$team")
+  [ -f "$reg" ] || return 3
+  local root; root=$(_root)
+
+  # Fallback run dir (for old registry rows without col 7)
+  local run
+  run=$(ls -dt "$root/.team/runs/"*"-$team" 2>/dev/null | head -1 || true)
+
+  # Lead's pane_ref, for the "in the lead's pane" note. Inside the monitor pane
+  # _lead_pane would resolve to the monitor itself, so sub_monitor bakes
+  # TEAM_LEAD_PANE into the pane's command.
+  local leadpane=
+  if command -v cmux >/dev/null && [ -n "${CMUX_WORKSPACE_ID:-}" ]; then
+    if [ -n "${TEAM_LEAD_PANE:-}" ]; then
+      leadpane="$TEAM_LEAD_PANE"
+    else
+      local lp; lp=$(_lead_pane 2>/dev/null || true)
+      leadpane="${lp%% *}"
+    fi
+  fi
+  _st_records "$reg" "$run" "$leadpane" "$team"
+}
+
+# ---------------------------------------------------------------------------
 # sub_status [--watch] <team>
+# One frame: summary + progress bar, a NEEDS YOU block only when something needs
+# attention, then the table. --watch re-reads the width every tick, repaints only
+# when the frame changed, syncs the sidebar from the same records, and exits 0
+# once `close` removes the registry.
 # Exit: 0 ok, 3 no registry
 # ---------------------------------------------------------------------------
 
@@ -392,37 +604,31 @@ sub_status() {
   local reg; reg=$(_reg "$team")
   [ -f "$reg" ] || { printf 'no teammates recorded for %s\n' "$team" >&2; return 3; }
 
-  local root; root=$(_root)
+  local color=0 ascii=0
+  _st_color_on && color=1
+  _st_ascii && ascii=1
 
-  # Resolve fallback run dir (for old registry rows without col 7)
-  local run
-  run=$(ls -dt "$root/.team/runs/"*"-$team" 2>/dev/null | head -1 || true)
-
-  # Resolve lead's pane_ref for PARKED detection.
-  # When running inside the monitor loop, sub_monitor pre-sets TEAM_LEAD_PANE so
-  # _lead_pane (which identifies the calling pane) returns the monitor's own pane
-  # rather than the lead's pane — making PARKED detection wrong.
-  local leadpane=
-  if command -v cmux >/dev/null && [ -n "${CMUX_WORKSPACE_ID:-}" ]; then
-    if [ -n "${TEAM_LEAD_PANE:-}" ]; then
-      leadpane="$TEAM_LEAD_PANE"
-    else
-      local lp; lp=$(_lead_pane 2>/dev/null || true)
-      leadpane="${lp%% *}"
-    fi
+  if [ -z "$watch" ]; then
+    local frame; frame=$(_st_collect "$team" | _st_frame "$team" "$(_st_cols)" "$color" "$ascii")
+    printf '%s\n' "${frame/@@CLOCK@@/$(date '+%H:%M:%S')}"
+    return 0
   fi
 
-  if [ -n "$watch" ]; then
-    # \$(date ...) is in the loop body — evaluated each iteration, not frozen.
-    while true; do
+  local interval=${TEAM_STATUS_INTERVAL:-30}
+  case $interval in *[!0-9]*|'') interval=30 ;; esac
+  [ "$interval" -lt 1 ] && interval=1
+  local prev= recs frame
+  while [ -f "$reg" ]; do
+    recs=$(_st_collect "$team" || true)
+    frame=$(printf '%s\n' "$recs" | _st_frame "$team" "$(_st_cols)" "$color" "$ascii")
+    if [ "$frame" != "$prev" ]; then
       clear
-      printf 'team %s — %s\n' "$team" "$(date '+%H:%M:%S')"
-      _st_table "$reg" "$run" "$leadpane" "$team"
-      sleep "${TEAM_STATUS_INTERVAL:-30}"
-    done
-  else
-    _st_table "$reg" "$run" "$leadpane" "$team"
-  fi
+      printf '%s\n' "${frame/@@CLOCK@@/$(date '+%H:%M:%S')}"
+      prev=$frame
+    fi
+    _st_sync_apply "$team" "$recs" || true
+    sleep "$interval"
+  done
 }
 
 # ---------------------------------------------------------------------------
@@ -443,9 +649,8 @@ sub_monitor() {
   case ${interval:-} in *[!0-9]*|'') interval=30 ;; esac
   local title="$team-monitor"
 
-  # Capture lead's pane_ref NOW (running as the lead).
-  # Baked into the status loop so PARKED detection is correct inside the
-  # monitor pane (where _lead_pane would otherwise resolve to the monitor itself).
+  # Capture lead's pane_ref NOW (running as the lead), for the monitor pane's
+  # command (inside it, _lead_pane would resolve to the monitor itself).
   local lead_pane=
   local lp; lp=$(_lead_pane 2>/dev/null || true)
   lead_pane="${lp%% *}"
@@ -477,16 +682,13 @@ sub_monitor() {
     fi
   fi
 
-  # Build the loop command string.
-  # \$(date ...) leaves a literal $(date ...) so the executing shell evaluates
-  # it each loop iteration. while [ -f <reg> ] exits when close removes the
-  # registry (no orphan process). TEAM_LEAD_PANE is baked in for correct
-  # PARKED detection inside the monitor pane.
-  local reg_q; reg_q=$(printf '%q' "$reg")
+  # The pane runs `status --watch`: the loop lives in real bash (sub_status) so it can
+  # keep the previous frame and repaint only on change; it reads the width each tick,
+  # syncs the sidebar, and exits when `close` removes the registry (no orphan
+  # process). TEAM_LEAD_PANE is baked in for the "in the lead's pane" note.
   local team_q; team_q=$(printf '%q' "$team")
   local script_q; script_q=$(printf '%q' "$here/team.sh")
-  # shellcheck disable=SC2016  # intentional: \$() must not expand at assignment
-  local cmd="while [ -f $reg_q ]; do clear; printf 'team %s -- %s\\n' $team_q \"\$(date '+%H:%M:%S')\"; TEAM_LEAD_PANE=$lead_pane_q bash $script_q status $team_q; bash $script_q sync $team_q 2>/dev/null || true; sleep $interval; done"
+  local cmd="TEAM_LEAD_PANE=$lead_pane_q TEAM_STATUS_INTERVAL=$interval bash $script_q status --watch $team_q"
 
   local out ref
   out=$(cmux new-split down --surface "$CMUX_SURFACE_ID" \
@@ -531,43 +733,39 @@ sub_sync() {
     return 0
   fi
 
-  local reg; reg=$(_reg "$team")
-  [ -f "$reg" ] || return 0
+  local recs; recs=$(_st_collect "$team") || return 0
+  _st_sync_apply "$team" "$recs"
+}
 
-  # Count total teammates and how many have reported (non-dash rows only).
-  local total=0 reported=0
-  local root; root=$(_root)
-  local fallback_run; fallback_run=$(ls -dt "$root/.team/runs/"*"-$team" 2>/dev/null | head -1 || true)
+# _st_sync_apply <team> <records>: pill + progress + transition log from _st_records
+# output. Read-only towards teammates (decision 28): it only writes the sidebar and
+# its own .sync state file, because the monitor pane and the lead both run it.
+_st_sync_apply() {
+  local team=$1 recs=$2
+  command -v cmux >/dev/null 2>&1 || return 0
+  [ -n "${CMUX_WORKSPACE_ID:-}" ] || return 0
+  local ws="$CMUX_WORKSPACE_ID" key="team-$team"
 
-  while IFS= read -r row; do
-    [ -z "$row" ] && continue
-    local lay; lay=$(awk '{print $3}' <<<"$row")
-    [ "$lay" = dash ] && continue
+  local total=0 reported=0 needs=0 started=0
+  local role title state ms _step _age _note
+  while IFS=$'\t' read -r role title state ms _step _age _note; do
+    [ -n "$title" ] || continue
     total=$((total + 1))
-    local title rundir
-    title=$(awk '{print $4}' <<<"$row")
-    rundir=$(awk 'NF>=7{print $7}' <<<"$row")
-    [ "${rundir:-}" = - ] && rundir=
-    local run="${rundir:-$fallback_run}"
-    local role="${title#"$team"-}"
-    if [ -n "$run" ] && [ -f "$run/reports/$role.md" ]; then
-      reported=$((reported + 1))
-    elif [ -n "$run" ] && [ -f "$run/tasks.md" ] \
-        && grep -qF -- "- [x] $title:" "$run/tasks.md" 2>/dev/null; then
-      reported=$((reported + 1))
-    fi
-  done < "$reg"
+    { [ "$ms" = reported ] || [ "$state" = FINISHED ]; } && reported=$((reported + 1))
+    [ "$ms" != spawned ] && started=1
+    case $state in WAITING|DEAD|MODEL_GONE|STALLED) needs=$((needs + 1)) ;; esac
+  done <<<"$recs"
 
-  # Phase label
-  local phase
-  if [ "$total" -eq 0 ]; then
-    phase="spawning"
-  elif [ "$reported" -ge "$total" ]; then
-    phase="done"
-  elif [ "$reported" -gt 0 ]; then
-    phase="working"
+  # Phase, pill colour and log level move together (one palette with the pane)
+  local phase pill_color level
+  if [ "$total" -gt 0 ] && [ "$reported" -ge "$total" ]; then
+    phase=done; pill_color=$_ST_C_DONE; level=success
+  elif [ "$needs" -gt 0 ]; then
+    phase="needs you"; pill_color=$_ST_C_ALERT; level=warning
+  elif [ "$reported" -gt 0 ] || [ -n "$started" ]; then
+    phase=working; pill_color=$_ST_C_ACTIVE; level=progress
   else
-    phase="spawning"
+    phase=spawning; pill_color=$_ST_C_ACTIVE; level=progress
   fi
 
   # Progress fraction 0.0-1.0
@@ -576,53 +774,53 @@ sub_sync() {
     frac=$(python3 -c "print(f'{$reported/$total:.2f}')" 2>/dev/null) || frac="0.0"
   fi
 
-  # Compute pill text; colour and log level follow the phase
   local pill="$phase · $reported/$total reported"
-  local pill_color=$_ST_C_ACTIVE level=progress
-  [ "$phase" = done ] && { pill_color=$_ST_C_DONE; level=success; }
 
   # Update sidebar (never fatal; use per-team key and explicit workspace)
   cmux set-status "$key" "$pill" --icon sparkle --color "$pill_color" \
     --priority "$_ST_PILL_PRIORITY" --workspace "$ws" 2>/dev/null || true
   cmux set-progress "$frac" --label "$team" --workspace "$ws" 2>/dev/null || true
 
-  # Transition logging: log when pill or per-teammate state changes.
-  # State file: first line = last pill, subsequent lines = reported titles.
-  # Derived from _reg's directory so TEAM_REG_DIR overrides work in tests.
+  # Transition logging. State file: line 1 = last pill, then "title<TAB>state<TAB>ms"
+  # per teammate. Derived from _reg's directory so TEAM_REG_DIR overrides work in tests.
   local state_file; state_file="$(dirname "$(_reg "$team")")/team-$team.sync"
-  local prev_pill="" prev_reported_titles=""
+  local prev_pill="" prev_rows=""
   if [ -f "$state_file" ]; then
     prev_pill=$(head -1 "$state_file" 2>/dev/null || true)
-    prev_reported_titles=$(tail -n +2 "$state_file" 2>/dev/null || true)
+    prev_rows=$(tail -n +2 "$state_file" 2>/dev/null || true)
   fi
 
-  # Log overall phase/count change
   if [ "$pill" != "$prev_pill" ]; then
     cmux log --source team --level "$level" "$team: $pill" --workspace "$ws" 2>/dev/null || true
   fi
 
-  # Build current reported titles list; log each new completion
-  local cur_reported_titles=""
-  while IFS= read -r row; do
-    [ -z "$row" ] && continue
-    local _lay _title _rundir
-    _lay=$(awk '{print $3}' <<<"$row")
-    [ "$_lay" = dash ] && continue
-    _title=$(awk '{print $4}' <<<"$row")
-    _rundir=$(awk 'NF>=7{print $7}' <<<"$row")
-    [ "${_rundir:-}" = - ] && _rundir=
-    local _run="${_rundir:-$fallback_run}"
-    local _role="${_title#"$team"-}"
-    if [ -n "$_run" ] && [ -f "$_run/reports/$_role.md" ]; then
-      cur_reported_titles="${cur_reported_titles}${_title}"$'\n'
-      if ! printf '%s\n' "$prev_reported_titles" | grep -qxF "$_title" 2>/dev/null; then
-        cmux log --source team --level success "$_title: reported" --workspace "$ws" 2>/dev/null || true
-      fi
+  local cur_rows="" prev pstate pms msg lvl
+  while IFS=$'\t' read -r role title state ms _step _age _note; do
+    [ -n "$title" ] || continue
+    cur_rows="${cur_rows}${title}"$'\t'"${state}"$'\t'"${ms}"$'\n'
+    prev=$(awk -F'\t' -v t="$title" '$1==t {print; exit}' <<<"$prev_rows" 2>/dev/null || true)
+    pstate=$(awk -F'\t' '{print $2}' <<<"$prev"); pms=$(awk -F'\t' '{print $3}' <<<"$prev")
+    msg= lvl=
+    if [ -z "$prev" ]; then msg=spawned lvl=progress
+    elif [ "$state" != "$pstate" ]; then
+      case $state in
+        WAITING)    msg="waiting (needs input)" lvl=warning ;;
+        IDLE)       msg="idle (turn ended without a report)" lvl=info ;;
+        STALLED)    msg="stalled?" lvl=warning ;;
+        DEAD)       msg=dead lvl=error ;;
+        MODEL_GONE) msg="model gone" lvl=error ;;
+        FINISHED)   msg=finished lvl=success ;;
+      esac
     fi
-  done < "$reg"
+    if [ "$ms" = reported ] && [ "$pms" != reported ] && [ -z "$msg" ]; then
+      msg=reported lvl=success
+    fi
+    [ -n "$msg" ] && { cmux log --source team --level "$lvl" "$title: $msg" \
+      --workspace "$ws" 2>/dev/null || true; }
+  done <<<"$recs"
 
   # Write current state (never fatal)
-  { printf '%s\n' "$pill"; printf '%s' "$cur_reported_titles"; } > "$state_file" 2>/dev/null || true
+  { printf '%s\n' "$pill"; printf '%s' "$cur_rows"; } > "$state_file" 2>/dev/null || true
 }
 
 # sub_sync_clear <team> — shorthand for close path in team.sh
