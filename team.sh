@@ -7,9 +7,11 @@
 #   team.sh lead-title    -> renames the lead's cmux workspace and tab to "Main Board - <project>"
 #                            (project = basename of the main checkout); idempotent; a no-op inside a teammate
 #   team.sh reap [--yes] [--exclude <team>]  -> live teammates left over from earlier teams of THIS project
-#                            (every /tmp registry, scoped by the project root in each row). Without --yes it only
-#                            lists them; --yes closes them. Rows of other projects are never shown or touched;
-#                            rows with no root (legacy) are listed as "unknown project" and never closed.
+#                            (every registry, scoped by the project root in each row). Without --yes it only
+#                            lists them, one "<team>  <title>  cmux <ref>  run <run-dir name>" line each, marked when
+#                            the run started today (may be live in another lead session); --yes closes them and
+#                            clears each fully reaped team's sidebar. Rows of other projects are never shown or
+#                            touched; live rows with no root (legacy) are only counted, never named or closed.
 #                            exit 1 if one could not be closed
 #   team.sh gate-init     -> sets up the no-mistakes gate for this repo (needs an "origin" remote)
 #   team.sh clean <team>  -> removes the team's worktrees that have no uncommitted changes (branches kept)
@@ -75,7 +77,8 @@
 # --worktree. With no [model], the tier is that of the default model the teammate starts on
 # (ANTHROPIC_MODEL, else "model" in managed-settings, else ~/.claude/settings.json), so a haiku-tier
 # default gets the same treatment. Every other tier uses TEAM_PERMISSION_MODE (default auto).
-# Spawned tabs/panes are recorded in /tmp/team-<team>.tabs, one row each (written by _reg_add):
+# Spawned tabs/panes are recorded in $TEAM_REG_DIR/team-<team>.tabs (default /tmp; tests point it at a
+# scratch dir so they never read or rewrite live registries), one row each (written by _reg_add):
 # "cmux <ref> <layout:pane|tab|dash> <title> <model|-> <subagent-model|-> <run-dir|-> <project-root>".
 # Rows older than rev4 have no <project-root> (reap derives it from a <run-dir> under <root>/.team/runs/, else
 # treats it as unknown). Paths with whitespace never match a project root, so such rows are never reaped.
@@ -107,7 +110,8 @@ _secret_lines() { sed -E 's/(^|[^A-Za-z0-9._%+-])git@/\1git /g' | grep -nEi -- "
 # pipeline fail, and it falls back to $PWD.
 _root() { git worktree list --porcelain 2>/dev/null | sed -n '1s/^worktree //p' || pwd; }
 _roles_lib() { echo "${TEAM_ROLES_DIR:-$HOME/.claude/team/roles}"; }
-_reg() { echo "/tmp/team-$1.tabs"; }
+_reg_dir() { echo "${TEAM_REG_DIR:-/tmp}"; }
+_reg() { echo "$(_reg_dir)/team-$1.tabs"; }
 _need_py() {
   command -v python3 >/dev/null 2>&1 && return 0
   echo "team.sh: python3 is required for '$sub' but was not found on PATH" >&2; exit 3
@@ -378,7 +382,7 @@ if [ "$sub" = lead-title ]; then
   exit 0
 fi
 
-# Leftovers of earlier runs of THIS project. Every /tmp registry is read, but a registry is only
+# Leftovers of earlier runs of THIS project. Every registry is read, but a registry is only
 # acted on when all of its rows record this project's root: another project's rows are never shown,
 # and a row with no root (or a registry that mixes roots) is listed as "unknown project" and never
 # closed. Only a live surface whose title still matches its row counts (refs get reused), and the
@@ -394,10 +398,11 @@ if [ "$sub" = reap ]; then
   me=$(cd -P "$(_root)" && pwd)
   titles=$(_surface_titles) || { echo "reap: could not read the cmux surface tree; nothing done" >&2; exit 1; }
   _lead=$(_lead_pane); leadsurface=${_lead##* }
-  rc=0 found=0
-  for reg in /tmp/team-*.tabs; do
+  today=$(date +%Y-%m-%d)
+  rc=0 found=0 unknown=0 dir=$(_reg_dir)
+  for reg in "$dir"/team-*.tabs; do
     [ -f "$reg" ] || continue
-    t=${reg#/tmp/team-}; t=${t%.tabs}
+    t=${reg#"$dir"/team-}; t=${t%.tabs}
     [ "$t" != "$excl" ] || continue
     # Classify the registry: ours only when every row has our root.
     ours=1 any=0
@@ -416,12 +421,16 @@ if [ "$sub" = reap ]; then
       cur=$(awk -F'\t' -v x="$r" '$1==x {print $2; exit}' <<<"$titles")
       live=; [ "$b" = cmux ] && [ -n "$cur" ] && [ "$cur" = "$title" ] && [ "$r" != "$leadsurface" ] && live=1
       if [ -z "$ours" ]; then
-        [ -n "$live" ] && { echo "$t  $title  cmux $r  unknown project (left alone)"; found=1; }
+        # No (or mixed) project root: may well belong to another project, so only count it.
+        [ -z "$live" ] || unknown=$((unknown+1))
         continue
       fi
       [ -n "$live" ] || continue   # gone or ref reused: the row is stale and dropped on --yes
       found=1
-      if [ -z "$yes" ]; then echo "$t  $title  cmux $r  earlier run of $(basename "$me")"; keep+="$row"$'\n'; continue; fi
+      # The run dir name tells an earlier run from one another lead session started today.
+      run=-; case ${rd:-} in */.team/runs/*) run=$(basename "$rd") ;; esac
+      note=; case $run in "$today"-*) note=" (run started today: may be live in another lead session)" ;; esac
+      if [ -z "$yes" ]; then echo "$t  $title  cmux $r  run $run$note"; keep+="$row"$'\n'; continue; fi
       err=$(cmux close-surface --surface "$r" --force 2>&1 >/dev/null) && err=
       case $err in *not_found*) err= ;; esac
       if [ -z "$err" ]; then echo "$t  $title  cmux $r  closed"
@@ -430,10 +439,13 @@ if [ "$sub" = reap ]; then
     [ -n "$yes" ] && [ -n "$ours" ] || continue
     # Rewrite our registry under its lock (subshell: _lock's EXIT trap releases it per registry).
     ( _lock "$reg"; if [ -z "$keep" ]; then rm -f "$reg"; else printf '%s' "$keep" > "$reg"; fi )
+    # A fully reaped team must not leave its sidebar pill/progress behind (lib/status.sh; best-effort).
+    if [ -z "$keep" ] && declare -F sub_sync >/dev/null; then sub_sync --clear "$t" || true; fi
     [ -z "$failed" ] || rc=1
   done
   [ "$found" = 1 ] || echo "reap: no live teammates left from earlier runs of $(basename "$me")"
-  [ -n "$yes" ] || [ "$found" = 0 ] || echo "reap: re-run with --yes to close the 'earlier run' rows above (unknown-project rows are never closed)"
+  [ "$unknown" = 0 ] || echo "reap: $unknown live teammate(s) in registries with no project root left alone (never closed)"
+  [ -n "$yes" ] || [ "$found" = 0 ] || echo "reap: re-run with --yes to close the rows above"
   exit "$rc"
 fi
 
@@ -782,7 +794,7 @@ rulesfile="$here/teammate-rules.md"
 # claude keeps only the LAST --append-system-prompt-file, so these are concatenated
 # rather than passed as two flags: the always-on teammate rules (parallelise with
 # subagents, verify what they return) plus the caveman style unless --no-caveman.
-sysprompt="/tmp/team-$team-$role.sysprompt.md"
+sysprompt="$(_reg_dir)/team-$team-$role.sysprompt.md"
 : > "$sysprompt"
 if [ -f "$rulesfile" ]; then cat "$rulesfile" >> "$sysprompt"; fi
 if [ -n "$caveman" ] && [ -f "$cavefile" ]; then printf '\n\n' >> "$sysprompt"; cat "$cavefile" >> "$sysprompt"; fi
