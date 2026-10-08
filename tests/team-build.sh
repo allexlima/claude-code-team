@@ -673,20 +673,14 @@ JSON
 # ══════════════════════════════════════════════════════════════════
 
 # rev4-1a: spawn without cmux on PATH → exit 3
-# Place a stub that exits 127 first in PATH so command -v cmux fails.
+# Build a PATH that has every essential dir EXCEPT dirs containing any cmux binary.
 {
   R="$W/rv1a"; _mkgit "$R"
   pf="$R/p.md"; printf 'prompt\n' > "$pf"
   TM="rv1a$$"
   _reset_logs
-  mkdir -p "$W/nobin"
-  cat > "$W/nobin/cmux" <<'BADSH'
-#!/usr/bin/env bash
-exit 127
-BADSH
-  chmod -x "$W/nobin/cmux"  # non-executable → command -v fails
-  out=$(cd "$R" && PATH="$W/nobin:$(echo "$PATH" | tr ':' '\n' | grep -v '/Applications/cmux' | grep -v 'cmux\.app' | tr '\n' ':' | sed 's/:$//')" \
-    bash "$TEAM_SH" spawn "$TM" worker "$pf" sonnet 2>&1) && rc=0 || rc=$?
+  nocmux_path=$(echo "$PATH" | tr ':' '\n' | while read -r d; do [ -x "$d/cmux" ] || echo "$d"; done | tr '\n' ':' | sed 's/:$//')
+  out=$(cd "$R" && PATH="$nocmux_path" bash "$TEAM_SH" spawn "$TM" worker "$pf" sonnet 2>&1) && rc=0 || rc=$?
   [ "$rc" = 3 ] && [[ "$out" == *"cmux"* ]] \
     && pass "rev4-1a: spawn without cmux exits 3 with install hint" \
     || fail "rev4-1a: spawn without cmux exits 3 with install hint" "rc=$rc out=${out:0:120}"
