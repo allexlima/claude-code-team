@@ -10,8 +10,9 @@
 #                            (every registry, scoped by the project root in each row). Without --yes it only
 #                            lists them, one "<team>  <title>  cmux <ref>  run <run-dir name>" line each, marked when
 #                            the run started today (may be live in another lead session); --yes closes them and
-#                            clears each fully reaped team's sidebar. Rows of other projects are never shown or
-#                            touched; live rows with no root (legacy) are only counted, never named or closed.
+#                            clears each fully reaped team's sidebar pill (the progress bar is per workspace, so
+#                            that also clears the caller's bar: run reap at step 0, before the new team syncs).
+#                            Rows of other projects are never shown or touched; live rows with no root (legacy) are only counted, never named or closed.
 #                            exit 1 if one could not be closed
 #   team.sh gate-init     -> sets up the no-mistakes gate for this repo (needs an "origin" remote)
 #   team.sh clean <team>  -> removes the team's worktrees that have no uncommitted changes (branches kept)
