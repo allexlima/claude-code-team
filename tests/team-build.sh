@@ -11,8 +11,8 @@ set -euo pipefail
 
 TEAM_SH="${TEAM_SH:-$(cd "$(dirname "$0")/.." && pwd)/team.sh}"
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
-fails=0
-pass() { echo "PASS  $1"; }
+fails=0; passes=0
+pass() { echo "PASS  $1"; passes=$((passes+1)); }
 fail() { echo "FAIL  $1${2:+ — $2}"; fails=$((fails+1)); }
 
 # ── PATH stubs — never open real panes, sessions, or terminals ──
@@ -385,7 +385,7 @@ JSON
        "cmux=$(grep -m1 '' "$CMUX_LOG" || echo '(empty)')"
 }
 
-# N4: haiku allowlist includes report/tasks/status paths
+# N4: haiku allowlist: contains Bash(git status:*) but NOT git diff/log/Bash(git:*)/python3
 {
   R="$W/n4c"; _mkgit "$R"
   run="$R/.team/runs/2026-10-08-myteam"; _mkrun "$run"
@@ -395,10 +395,19 @@ JSON
   (cd "$R" && bash "$TEAM_SH" spawn "$TM" worker "$pf" \
     system.ai.claude-haiku-4-5) >/dev/null 2>&1 && true || true
   rm -f "/tmp/team-$TM.tabs"
-  grep -q 'allowedTools' "$CMUX_LOG" \
-    && pass "N4: haiku spawn cmd includes --allowedTools" \
-    || fail "N4: haiku spawn cmd includes --allowedTools" \
-       "cmux=$(grep -m1 '' "$CMUX_LOG" || echo '(empty)')"
+  has_status=0; has_diff=0; has_python3=0
+  # Log uses printf %q escaping: "git\ status" in the line; use .* to match any separator
+  grep -q 'git.*status' "$CMUX_LOG" && has_status=1 || true
+  # git diff/log/Bash(git:*) must NOT appear (44edfd6 removes them; they write via --output)
+  grep -qE 'git.*diff|git.*log|git.*show|Bash.git:..\)' "$CMUX_LOG" && has_diff=1 || true
+  grep -q 'python3' "$CMUX_LOG" && has_python3=1 || true
+  [ "$has_status" = 1 ] && pass "N4: haiku allowlist contains Bash(git status:*)" \
+    || fail "N4: haiku allowlist contains Bash(git status:*)" \
+       "cmux=$(grep -o 'allowedTools[^\"]*' "$CMUX_LOG" | head -1 || echo '(not found)')"
+  [ "$has_diff" = 0 ] && pass "N4: haiku allowlist excludes git diff/log/Bash(git:*)" \
+    || fail "N4: haiku allowlist excludes git diff/log/Bash(git:*)" "found in cmux log"
+  [ "$has_python3" = 0 ] && pass "N4: haiku allowlist excludes python3" \
+    || fail "N4: haiku allowlist excludes python3" "found in cmux log"
 }
 
 # ══════════════════════════════════════════════════════════════════
@@ -671,6 +680,6 @@ SH3
 # Summary
 # ══════════════════════════════════════════════════════════════════
 echo ""
-[ "$fails" = 0 ] && echo "all passed ($(($(grep -c '^pass\b' "$0" || true))) cases)" \
+[ "$fails" = 0 ] && echo "all passed ($passes cases)" \
   || echo "$fails case(s) failed"
 [ "$fails" = 0 ]
