@@ -22,13 +22,15 @@
 #   team.sh clean <team>  -> removes the team's worktrees that have no uncommitted changes (branches kept)
 #   team.sh finish <team> <role> -> after the lead received a teammate's report: mark its row finished (session id
 #                                  and cwd kept), then close its pane. exit 2 refused, nothing changed: the report did
-#                                  not grow since spawn or has no PARALLELISM: section in the new part, tasks.md lacks
+#                                  not grow since spawn or gained no new PARALLELISM: line, tasks.md lacks
 #                                  "- [x] <team>-<role>:", or its --worktree has uncommitted changes; exit 3 not
 #                                  recorded; exit 1 the close failed (row stays finished; re-run to retry)
 #   team.sh show <team> <role>  -> bring a teammate's pane to the front and focus it (a --tabs teammate is first
-#                                  moved out of your pane into its own); exit 3 finished, gone or not recorded
-#   team.sh list <team>         -> each teammate: working (<pane>) / tab (in your pane, running) / finished / dead /
-#                                  unknown (not a cmux row); MODEL_GONE when its model left the picker
+#                                  moved out of your pane into its own); exit 3 finished, gone or not recorded,
+#                                  exit 1 cmux could not resolve its pane (it may still be running)
+#   team.sh list <team>         -> each teammate: working (<pane>) / tab (in your pane, running) / finished / dead
+#                                  (cmux says not found) / unknown (not a cmux row, or cmux gave no answer); MODEL_GONE
+#                                  when its model left the picker
 #   team.sh models              -> models available here, best tier first
 #   team.sh pick-model <tier>   -> newest claude-* model id for opus|sonnet|haiku; exit 1 = fell back a tier
 #                                  (warning on stderr), 2 = bad tier, 3 = nothing matches
@@ -271,6 +273,8 @@ _reg_add() {
 # 0 when a registry row (whole line) carries the terminal marker: its teammate was finished on purpose
 # (`team.sh finish`), its pane is gone by design, and the row holds the session id to resume from.
 _finished() { [ "$(awk '{print $9}' <<<"$1")" = finished ]; }
+# A report's last mandatory section header (plain, bold or heading markdown); `finish` counts these.
+_trailer='^[#*> _-]*PARALLELISM:'
 # Project root of a row (col 7 run dir, col 8 root), as a physical path, or nothing when unknown.
 # Rows older than rev4 have no root: derive it from a run dir under <root>/.team/runs/.
 _row_root() {
@@ -611,8 +615,8 @@ fi
 # Finish one teammate whose report the lead has received: persist its row as `finished` (session id
 # + cwd kept for a resume), then close its pane to free the session. An explicit lead action, never
 # inferred from polling the filesystem. Refuses (exit 2, nothing changed) unless the round's work is
-# durable: the report grew past the size recorded when this session was spawned and a `PARALLELISM:`
-# header (the report's last mandatory section) appears in the new part, `tasks.md` has
+# durable: the report grew past the size recorded when this session was spawned and has more
+# `PARALLELISM:` headers (the report's last mandatory section) than it had then, `tasks.md` has
 # "- [x] <team>-<role>:", and a --worktree teammate's worktree has no uncommitted changes (a forced
 # close kills the session, so uncommitted code would be lost). The marker is written under the
 # registry lock BEFORE the close, so a failed close leaves a finished row and a re-run retries it.
@@ -633,22 +637,18 @@ if [ "$sub" = finish ]; then
     [ -n "${rd:-}" ] && [ "$rd" != - ] || { echo "finish: refused: $title has no run dir, so its report cannot be checked" >&2; exit 2; }
     rep="$rd/reports/$role.md"
     [ -s "$rep" ] || { echo "finish: refused: $rep is missing or empty" >&2; exit 2; }
-    # Baseline written by spawn: "<bytes> <cksum>" of the report when this session started.
-    base=$(cat "$(_reg_dir)/team-$team-$role.round" 2>/dev/null || true)
-    bb=${base%% *} bc=${base#* }; case $bb in ''|*[!0-9]*) bb=0 bc= ;; esac
+    # Baseline written by spawn: "<bytes> <PARALLELISM: lines>" of the report when this session
+    # started (none: an empty report). Counting the trailer lines is order-independent: a round's
+    # block inserted above the previous round's trailer must still add a trailer of its own.
+    bb=0 bn=0; round="$(_reg_dir)/team-$team-$role.round"
+    if [ -f "$round" ]; then read -r bb bn _ < "$round" || true; fi
+    case ${bb:-} in ''|*[!0-9]*) bb=0 ;; esac; case ${bn:-} in ''|*[!0-9]*) bn=0 ;; esac
     size=$(wc -c < "$rep" | tr -d ' ')
-    new=$rep
-    if [ "$bb" -gt 0 ]; then
-      [ "$size" -gt "$bb" ] || [ "$(cksum < "$rep")" != "$bc" ] || {
-        echo "finish: refused: $rep has not changed since $title was spawned (no new report this round)" >&2; exit 2; }
-      # Appended (the first <bb> bytes are untouched): only the new part counts. Rewritten: the whole file.
-      if [ "$size" -gt "$bb" ] && [ "$(head -c "$bb" "$rep" | cksum)" = "$bc" ]; then
-        new=$(mktemp); tail -c +"$((bb+1))" "$rep" > "$new"
-      fi
-    fi
-    hit=; grep -qE '^[#*> _-]*PARALLELISM:' "$new" && hit=1
-    [ "$new" = "$rep" ] || rm -f "$new"
-    [ -n "$hit" ] || { echo "finish: refused: no PARALLELISM: section in this round's part of $rep (report incomplete or still being written)" >&2; exit 2; }
+    np=$(grep -cE "$_trailer" "$rep" || true)
+    [ "$size" -gt "$bb" ] || {
+      echo "finish: refused: $rep did not grow since $title was spawned (recorded $bb bytes, now $size): no new report this round" >&2; exit 2; }
+    [ "$np" -gt "$bn" ] || {
+      echo "finish: refused: $rep has no new PARALLELISM: section this round ($bn at spawn, $np now): report incomplete or still being written" >&2; exit 2; }
     grep -qF -e "- [x] $title:" -e "- [X] $title:" "$rd/tasks.md" 2>/dev/null || {
       echo "finish: refused: $rd/tasks.md has no '- [x] $title:' line" >&2; exit 2; }
     case $cwd in
@@ -708,10 +708,11 @@ if [ "$sub" = show ] || [ "$sub" = list ]; then
       if _model_gone "${mdl:-}" || _model_gone "${smdl:-}"; then gone="  MODEL_GONE"; fi
       if [ "$b" != cmux ]; then st="unknown ($b $ref)"
       elif _finished "$row"; then st=finished
+      elif ! _alive "$b" "$ref"; then st=dead   # only a definite "not found" counts as dead
       else
         pp=$(_pane_of "$ref")
         case "$pp" in
-          gone) st=dead ;;
+          gone) st="unknown (cmux did not resolve its pane)" ;;
           "$leadpane") st="tab (in your pane, running)" ;;
           *) st="working ($pp)" ;;
         esac
@@ -726,8 +727,10 @@ if [ "$sub" = show ] || [ "$sub" = list ]; then
   ref=$(awk '{print $2}' <<<"$row")
   [ -n "$ref" ] || { echo "no recorded pane for $title (not spawned)"; exit 3; }
   if _finished "$row"; then echo "$title is finished (no pane); spawn it again to give it more work"; exit 3; fi
+  _alive cmux "$ref" || { echo "$title is gone; respawn it"; exit 3; }
   cur=$(_pane_of "$ref")
-  [ "$cur" = gone ] && { echo "$title is gone; respawn it"; exit 3; }
+  # Alive but unresolved: cmux is failing, not the teammate. Never suggest a respawn (or --replace) here.
+  [ "$cur" != gone ] || { echo "show: cmux did not resolve $title's pane ($ref); it may still be running. Retry, or check cmux" >&2; exit 1; }
   if [ "$cur" = "$leadpane" ]; then
     # Extend the teammate region rather than shrinking the lead: hang it off whoever
     # is already working, and only split the lead when no teammate is visible.
@@ -872,11 +875,11 @@ if [ -n "$live" ]; then
 fi
 n_mates=$(_mates "$reg" | grep -c . || true)
 [ "$n_mates" -lt 8 ] || { echo "team $team already has $n_mates live teammates (cap 8); close or replace one first" >&2; exit 4; }
-# The report as it stands now ("<bytes> <cksum>", or none yet): `finish` requires this session's
-# round to have added to it, since a later round appends to the same report.
+# The report as it stands now ("<bytes> <PARALLELISM: lines>", or none yet): `finish` requires this
+# session's round to have grown it and added a trailer, since a later round appends to the same report.
 round="$(_reg_dir)/team-$team-$role.round"
 if [ "$rundir" != - ] && [ -s "$rundir/reports/$role.md" ]; then
-  echo "$(wc -c < "$rundir/reports/$role.md" | tr -d ' ') $(cksum < "$rundir/reports/$role.md")" > "$round"
+  echo "$(wc -c < "$rundir/reports/$role.md" | tr -d ' ') $(grep -cE "$_trailer" "$rundir/reports/$role.md" || true)" > "$round"
 else rm -f "$round"; fi
 
 dir=$PWD
