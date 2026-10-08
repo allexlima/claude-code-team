@@ -19,8 +19,14 @@ the slowest teammate sets the pace for the whole team.
   If you could not verify something, say so rather than passing it along.
 - **Report what you parallelised** on the PARALLELISM line of your report, so the lead
   can see it happened.
-- Keep the fan-out proportionate: a handful of focused subagents beats a swarm, and every
-  other teammate is doing this at the same time.
+- **Cap at 4 concurrent subagents per dispatch.** Dispatch at most 4 agents in a single
+  message. If you have more independent sub-tasks, dispatch in batches of 4 and wait for
+  each batch before sending the next. Each subagent call should pass a `model` (sonnet by
+  default; use a cheaper model only for purely mechanical sweeps such as grep, cat, or count).
+- **Write a one-line status update** to `status/<role>.txt` in your run directory whenever
+  you start a major step (e.g. `investigating facts`, `running facts-lint`, `drafting report`).
+  Overwrite it each time — do not append. One line, no secrets or data. Your spawn prompt
+  includes the absolute run directory path.
 - **Send questions to the lead, not your own pane.** When you need the user's input, a
   decision, or sign-off on an approach, do NOT use AskUserQuestion or wait silently in your
   pane — the user is not watching it. SendMessage the lead a message whose first line is
