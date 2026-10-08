@@ -97,8 +97,10 @@ forces one model everywhere; a haiku-tier id puts every role in dontAsk and is r
   code, paths and errors unchanged. The lead's summary to you stays normal prose.
 
 ## Later rounds: resumed teammates
-A finished teammate's session id is recorded, so a later round tries to resume that session
-(it keeps its full context) and falls back to a fresh teammate that reads its earlier report.
+A finished teammate's session id is recorded, so a later round resumes that session
+(`team.sh spawn --resume`; it keeps its full context) and falls back to a fresh teammate that
+reads its earlier report when no session is recorded or its directory is gone. Shutting the
+team down (`close`) drops finished rows, so nothing can be resumed afterwards.
 Known behaviour to expect:
 - **Edits to `teammate-rules.md` do not reach a resumed teammate.** Claude records the system
   prompt on the first request and replays it on resume; a changed prompt file is ignored with
@@ -106,7 +108,8 @@ Known behaviour to expect:
   message to it. A fresh teammate does read the current rules.
 - The permission mode is re-applied on resume (verified for `--permission-mode`; that the
   haiku-tier `--allowedTools` allowlist also re-applies is inferred, not observed).
-- Resuming a build-run teammate after `team.sh clean` removed its worktree is untested.
+- Resuming a build-run teammate after `team.sh clean` removed its worktree is refused (its
+  directory is gone), so the lead starts a fresh teammate from its report.
 
 ## Project memory: .team/
 Created at the project root on first run (git-ignored, along with CLAUDE.local.md;
@@ -171,12 +174,13 @@ team. Requires cmux; skipped under --inline.
     /team quick sanity review of src/utils.py --roles 2 --inline
 
 ## While it runs
-- Click into any teammate pane to talk to it directly or redirect it. A finished
-  teammate has no pane; ask the lead to resume it.
+- Click into any teammate pane to talk to it directly or redirect it, or ask the lead to
+  `show` it (brings its pane to the front and moves focus there). A finished teammate has
+  no pane; ask the lead to resume it.
 - Teammate *tool-permission* prompts appear in *their* pane — approve them there.
   **Known limitation:** a prompt produces no notification, so the status pane cannot flag
   it. The teammate shows `WORKING` for about 10 minutes, then `STALLED?`. If a teammate has
-  been quiet that long, look in its pane (titled `<team>-<role>`) before assuming a bug.
+  been quiet that long, ask the lead to `show` it (brings its pane to the front) before assuming a bug.
   (Haiku-tier teammates run in dontAsk mode and don't prompt; denied tools appear in
   their report.)
 - A teammate that needs your input or a decision forwards the question to the lead via
@@ -193,7 +197,7 @@ team. Requires cmux; skipped under --inline.
   A `NEEDS YOU` block is pinned above the table only when a teammate is in one of the first
   four states below; the STEP column is dropped below 60 columns.
     waiting      AskUserQuestion notification detected — teammates must not use this;
-                 look at its pane and SendMessage it to send NEEDS INPUT to the lead instead.
+                 `show` its pane and SendMessage it to send NEEDS INPUT to the lead instead.
                  Not detected for haiku/dontAsk tier.
     model gone   Its model is no longer available — respawn with a different model
     dead         Session exited — respawn it (a note says when its report is safe on disk)
