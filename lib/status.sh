@@ -182,9 +182,11 @@ _st_row() {
           flags="${flags}PARKED "
         fi
 
-        # WAITING: unread cmux notification for this surface (skip haiku/dontAsk tier)
-        # Title "Claude question" = teammate waiting for human input.
-        # Exact waiting-state title confirmed by rev4-tests probe.
+        # WAITING: newest cmux notification for this surface indicates human input needed.
+        # Skip for haiku/dontAsk tier (no human approval needed).
+        # Patterns: title "Claude question" = AskUserQuestion; subtitle prefix "Waiting"
+        # or "Permission" covers tool-approval prompts. Exact signatures pending
+        # rev4-tests live probe — update grep pattern once confirmed.
         local skip_waiting=
         case "${mdl:-}" in *haiku*|*glm*|*kimi*) skip_waiting=1 ;; esac
         if [ -z "$skip_waiting" ] && declare -f _model_tier >/dev/null 2>&1; then
@@ -195,12 +197,17 @@ _st_row() {
           local uuid
           uuid=$(awk -F'=' -v r="$ref" '$1==r {print $2; exit}' <<<"$_ST_UUID_MAP" 2>/dev/null || true)
           if [ -n "$uuid" ]; then
-            local notif_title
-            notif_title=$(awk -F'|' -v u="$uuid" '$1==u {print $2; exit}' \
-                          <<<"$_ST_NOTIF_DATA" 2>/dev/null || true)
-            if [ -n "$notif_title" ]; then
-              printf '%s\n' "$notif_title" \
-                | grep -qiE 'claude question|waiting|permission|needs.*(input|approval)' \
+            local notif_line notif_title notif_subtitle
+            notif_line=$(awk -F'|' -v u="$uuid" '$1==u {print; exit}' \
+                         <<<"$_ST_NOTIF_DATA" 2>/dev/null || true)
+            if [ -n "$notif_line" ]; then
+              notif_title=$(awk -F'|' '{print $2}' <<<"$notif_line")
+              notif_subtitle=$(awk -F'|' '{print $3}' <<<"$notif_line")
+              # Match on title (Claude question) OR subtitle prefix (Waiting/Permission)
+              { printf '%s\n' "$notif_title" \
+                  | grep -qiE 'claude question|waiting|permission' \
+                || printf '%s\n' "$notif_subtitle" \
+                  | grep -qiE '^waiting|^permission|^needs.*(input|approval)'; } \
                 && flags="${flags}WAITING "
             fi
           fi
@@ -242,19 +249,44 @@ except Exception:
 " 2>/dev/null || true)
   fi
 
-  # Fetch unread notifications for WAITING state detection.
-  # Filter: emit only surface_id, title, subtitle (never body — privacy).
+  # Build team UUID set from registry refs (used to filter notification data).
+  local _st_team_uuids=""
+  if [ -n "$_ST_UUID_MAP" ]; then
+    while IFS= read -r row; do
+      [ -z "$row" ] && continue
+      local _lay _ref _uid
+      _lay=$(awk '{print $3}' <<<"$row")
+      [ "$_lay" = dash ] && continue
+      _ref=$(awk '{print $2}' <<<"$row")
+      _uid=$(awk -F'=' -v r="$_ref" '$1==r {print $2; exit}' <<<"$_ST_UUID_MAP" 2>/dev/null || true)
+      [ -n "$_uid" ] && _st_team_uuids="$_st_team_uuids $_uid"
+    done < "$reg"
+    _st_team_uuids="${_st_team_uuids# }"
+  fi
+
+  # Fetch notifications for WAITING state detection.
+  # Privacy: filter to team surface UUIDs only; never emit body.
+  # Stale-state: keep NEWEST notification per surface (by created_at), regardless
+  # of read state, so a stale "waiting" cleared by a newer "Completed" won't fire.
   _ST_NOTIF_DATA=
   if command -v cmux >/dev/null && command -v python3 >/dev/null; then
-    _ST_NOTIF_DATA=$(python3 -c "
-import json, subprocess, sys
+    _ST_NOTIF_DATA=$(export _ST_TEAM_UUIDS="$_st_team_uuids"; python3 -c "
+import json, subprocess, sys, os
+team_uuids = set(os.environ.get('_ST_TEAM_UUIDS', '').split())
 try:
     r = subprocess.run(['cmux', 'list-notifications', '--json'],
                       capture_output=True, text=True, timeout=5)
+    newest = {}  # surface_id -> newest notification dict
     for n in json.loads(r.stdout):
-        if n.get('is_read', True):
-            continue
         sid = n.get('surface_id', '')
+        if not sid:
+            continue
+        if team_uuids and sid not in team_uuids:
+            continue  # filter to team surfaces only
+        ts = n.get('created_at', '')
+        if sid not in newest or ts > newest[sid].get('created_at', ''):
+            newest[sid] = n
+    for sid, n in newest.items():
         # Replace | in title/subtitle to keep pipe-split safe; never emit body
         title = n.get('title', '').replace('|', ' ')
         subtitle = n.get('subtitle', '').replace('|', ' ')
@@ -418,7 +450,13 @@ sub_sync() {
 
   if [ -n "$clear" ]; then
     cmux clear-status "$key" --workspace "$ws" 2>/dev/null || true
-    cmux clear-progress --workspace "$ws" 2>/dev/null || true
+    # Only clear the progress bar if no other team-* key exists in this workspace.
+    # clear-progress is workspace-wide; two teams sharing a workspace must not
+    # wipe each other's bar.
+    local other_key
+    other_key=$(cmux list-status --workspace "$ws" 2>/dev/null \
+      | grep -oE '^team-[^=]+' | grep -vF "$key" | head -1 || true)
+    [ -z "$other_key" ] && cmux clear-progress --workspace "$ws" 2>/dev/null || true
     cmux log --source team --level info "team $team: closed" \
       --workspace "$ws" 2>/dev/null || true
     return 0
