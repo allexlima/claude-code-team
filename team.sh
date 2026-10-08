@@ -7,18 +7,19 @@
 #   team.sh clean <team>  -> removes the team's worktrees that have no uncommitted changes (branches kept)
 #   team.sh park <team> <role>  -> fold an idle teammate's pane into a tab (keeps it running)
 #   team.sh show <team> <role>  -> bring a parked teammate back into its own pane
-#   team.sh list <team>         -> each teammate: working / parked / closed; MODEL GONE when its model left the picker
+#   team.sh list <team>         -> each teammate: working / parked / closed; MODEL_GONE when its model left the picker
 #   team.sh models              -> models available here, best tier first
 #   team.sh pick-model <tier>   -> newest claude-* model id for opus|sonnet|haiku; exit 1 = fell back a tier
 #                                  (warning on stderr), 2 = bad tier, 3 = nothing matches
-#   team.sh role <name>         -> print a role spec path (project override, then shared library); exit 3 if none
-#   team.sh roles               -> list roles available here: "<name>  project|user  <path>"
+#   team.sh role <name>         -> print a role spec path (project override, then shared library); exit 2 bad name, 3 if none
+#   team.sh roles               -> list roles available here: "<name>  project|user  <path>  <status>", status one of
+#                                  in-sync|local-ahead|global-ahead|diverged|diverged (no base)|project-only|library-only
 #   team.sh role-pull <name> [--force]     -> copy the shared library role into .team/roles/ (records .team/roles/.base/);
 #                                             fast-forwards when the local copy is unchanged since .base/.
-#                                             exit 0 ok/no-op, 2 PII hit, 3 bad name/not in library, 5 conflict (needs --force)
+#                                             exit 0 ok/no-op, 2 bad name/option, 3 not in library, 5 conflict (needs --force)
 #   team.sh role-promote <name> [--force]  -> copy a project role into the shared library, secret/PII scan first;
 #                                             library ahead always refuses (run role-pull).
-#                                             exit 0 ok/no-op, 2 PII hit, 3 bad name/not in project, 5 conflict (needs --force)
+#                                             exit 0 ok/no-op, 2 bad name/option or PII hit, 3 not in project, 5 conflict (needs --force)
 #   team.sh status [--watch] <team>        -> one row per teammate: ROLE | MILESTONE | STEP | LAST_ACTIVITY | FLAGS;
 #                                             --watch refreshes every 30s (Ctrl-C stops). exit 3 no registry
 #   team.sh monitor <team>                 -> open one small auto-refreshing status pane (layout dash, title
@@ -55,7 +56,7 @@
 # --tabs (cmux): one tab per teammate instead. --tmux forces tmux.
 # Permission mode: a haiku-tier model (by resolved tier, so any id that behaves as haiku) always
 # gets --permission-mode dontAsk plus a per-teammate allowlist: Read/Glob/Grep, SendMessage,
-# read-only git (status/log/diff/show/ls-files/rev-parse/blame), ls/wc, and Edit on exactly its
+# read-only git (status/log/diff/show/ls-files/rev-parse/blame), ls/wc, `team.sh facts-lint`, and Edit on exactly its
 # <run>/reports/<role>.md, <run>/tasks.md and <run>/status/<role>.txt (<run> = parent of the
 # prompt file's prompts/ dir, which a haiku-tier prompt must live in). Haiku tier is refused with
 # --worktree. Every other tier uses TEAM_PERMISSION_MODE (default auto); it never applies to haiku tier.
@@ -220,7 +221,7 @@ _reg_prune() {
 }
 # Registry lock: anything that reads-then-appends the registry holds it. mkdir is atomic; a
 # lock whose holder pid is dead is broken, a live one is waited on for up to 30s, then exit 4.
-# Released on exit.
+# Released on exit via an EXIT trap, which replaces any earlier EXIT trap: call once per process.
 _lock() {
   local lock="$1.lock" i holder
   for i in $(seq 1 300); do
@@ -430,13 +431,13 @@ if [ "$sub" = park ] || [ "$sub" = show ] || [ "$sub" = list ]; then
   [ -n "$leadpane" ] || { echo "could not resolve this session's pane — run park/show from the lead's pane"; exit 3; }
 
   if [ "$sub" = list ]; then
-    # Teammates only (layout pane|tab): the dash monitor is not a teammate. MODEL GONE: the
+    # Teammates only (layout pane|tab): the dash monitor is not a teammate. MODEL_GONE: the
     # teammate's or its subagents' model left the picker, so its next call fails; respawn it.
     while read -r b ref lay name mdl smdl _; do
       [ -n "${ref:-}" ] || continue
       case ${lay:-} in pane|tab) ;; *) continue ;; esac
       gone=""
-      if _model_gone "${mdl:-}" || _model_gone "${smdl:-}"; then gone="  MODEL GONE"; fi
+      if _model_gone "${mdl:-}" || _model_gone "${smdl:-}"; then gone="  MODEL_GONE"; fi
       if [ "$b" != cmux ]; then echo "${name:-?}  $b $ref  model=${mdl:--}$gone"; continue; fi
       pp=$(_pane_of "$ref")
       case "$pp" in
@@ -516,7 +517,8 @@ if [ -n "$model" ]; then
   fi
 else
   echo "warn: no model picked for $team-$role — it inherits the lead's model." >&2
-  echo "      Fit one per role instead: team.sh pick-model <tier>" >&2
+  echo "      Fit one per role instead: team.sh pick-model <tier>. If the lead runs a haiku-tier" >&2
+  echo "      model, this teammate gets no dontAsk allowlist and will stall on permission prompts." >&2
 fi
 tier=$(_model_tier "$model")
 title="$team-$role"
@@ -540,6 +542,8 @@ if [ "$tier" = haiku ]; then
   allow="Read,Glob,Grep,SendMessage,ListAgents"
   allow+=",Edit(/$rundir/reports/$role.md),Edit(/$rundir/tasks.md),Edit(/$rundir/status/$role.txt)"
   allow+=",Bash(ls:*),Bash(wc:*)"
+  # Every spawn prompt asks for facts-lint; a rule matches the command text as typed, so both forms.
+  allow+=",Bash(bash ~/.claude/skills/team/team.sh facts-lint:*),Bash(bash $here/team.sh facts-lint:*)"
   for g in status log diff show ls-files rev-parse blame; do allow+=",Bash(git $g:*)"; done
   pmode=dontAsk
   echo "note: $title is haiku-tier ($model): --permission-mode dontAsk + read-only allowlist" >&2
