@@ -182,18 +182,21 @@ _st_row() {
           flags="${flags}PARKED "
         fi
 
-        # WAITING: newest cmux notification for this surface indicates human input needed.
-        # Skip for haiku/dontAsk tier (no human approval needed).
-        # Patterns: title "Claude question" = AskUserQuestion; subtitle prefix "Waiting"
-        # or "Permission" covers tool-approval prompts. Exact signatures pending
-        # rev4-tests live probe — update grep pattern once confirmed.
+        # WAITING / DONE: derive from newest cmux notification for this surface.
+        # Skip WAITING for haiku/dontAsk tier (no human approval needed).
+        # Probed by rev4-tests (CLI 2.1.294):
+        #   AskUserQuestion  → title="Claude question", subtitle=""
+        #   Completion/Stop  → title="Claude Code",     subtitle="Completed in <session>"
+        #   PermissionRequest → NOT in list-notifications (uses cmux hooks feed).
+        #     Permission prompts cannot be detected via notifications; tool-approval
+        #     prompts are handled only through the process exit path (DEAD flag).
         local skip_waiting=
         case "${mdl:-}" in *haiku*|*glm*|*kimi*) skip_waiting=1 ;; esac
         if [ -z "$skip_waiting" ] && declare -f _model_tier >/dev/null 2>&1; then
           local tier; tier=$(_model_tier "${mdl:-}" 2>/dev/null || true)
           [ "$tier" = haiku ] && skip_waiting=1
         fi
-        if [ -z "$skip_waiting" ] && [ -n "$_ST_UUID_MAP" ] && [ -n "$_ST_NOTIF_DATA" ]; then
+        if [ -n "$_ST_UUID_MAP" ] && [ -n "$_ST_NOTIF_DATA" ]; then
           local uuid
           uuid=$(awk -F'=' -v r="$ref" '$1==r {print $2; exit}' <<<"$_ST_UUID_MAP" 2>/dev/null || true)
           if [ -n "$uuid" ]; then
@@ -203,12 +206,16 @@ _st_row() {
             if [ -n "$notif_line" ]; then
               notif_title=$(awk -F'|' '{print $2}' <<<"$notif_line")
               notif_subtitle=$(awk -F'|' '{print $3}' <<<"$notif_line")
-              # Match on title (Claude question) OR subtitle prefix (Waiting/Permission)
-              { printf '%s\n' "$notif_title" \
-                  | grep -qiE 'claude question|waiting|permission' \
-                || printf '%s\n' "$notif_subtitle" \
-                  | grep -qiE '^waiting|^permission|^needs.*(input|approval)'; } \
-                && flags="${flags}WAITING "
+              # WAITING (AskUserQuestion only; permission prompts not in notifications)
+              if [ -z "$skip_waiting" ]; then
+                printf '%s\n' "$notif_title" | grep -qi 'claude question' \
+                  && flags="${flags}WAITING "
+              fi
+              # DONE: session completed its last turn but report not yet on disk
+              if [ "$ms" != reported ]; then
+                printf '%s\n' "$notif_subtitle" | grep -qi '^completed in ' \
+                  && flags="${flags}DONE "
+              fi
             fi
           fi
         fi
@@ -507,10 +514,51 @@ sub_sync() {
     frac=$(python3 -c "print(f'{$reported/$total:.2f}')" 2>/dev/null) || frac="0.0"
   fi
 
+  # Compute pill text
+  local pill="$phase · $reported/$total reported"
+
   # Update sidebar (never fatal; use per-team key and explicit workspace)
-  cmux set-status "$key" "$phase · $reported/$total reported" \
+  cmux set-status "$key" "$pill" \
     --icon sparkle --color "#4C8DFF" --workspace "$ws" 2>/dev/null || true
   cmux set-progress "$frac" --label "$team" --workspace "$ws" 2>/dev/null || true
+
+  # Transition logging: log when pill or per-teammate state changes.
+  # State file: first line = last pill, subsequent lines = reported titles.
+  # /tmp lives next to the registry; volatile (lost on reboot) is fine.
+  local state_file="/tmp/team-$team.sync"
+  local prev_pill="" prev_reported_titles=""
+  if [ -f "$state_file" ]; then
+    prev_pill=$(head -1 "$state_file" 2>/dev/null || true)
+    prev_reported_titles=$(tail -n +2 "$state_file" 2>/dev/null || true)
+  fi
+
+  # Log overall phase/count change
+  if [ "$pill" != "$prev_pill" ]; then
+    cmux log --source team "$team: $pill" --workspace "$ws" 2>/dev/null || true
+  fi
+
+  # Build current reported titles list; log each new completion
+  local cur_reported_titles=""
+  while IFS= read -r row; do
+    [ -z "$row" ] && continue
+    local _lay _title _rundir
+    _lay=$(awk '{print $3}' <<<"$row")
+    [ "$_lay" = dash ] && continue
+    _title=$(awk '{print $4}' <<<"$row")
+    _rundir=$(awk 'NF>=7{print $7}' <<<"$row")
+    [ "${_rundir:-}" = - ] && _rundir=
+    local _run="${_rundir:-$fallback_run}"
+    local _role="${_title#"$team"-}"
+    if [ -n "$_run" ] && [ -f "$_run/reports/$_role.md" ]; then
+      cur_reported_titles="${cur_reported_titles}${_title}"$'\n'
+      if ! printf '%s\n' "$prev_reported_titles" | grep -qxF "$_title" 2>/dev/null; then
+        cmux log --source team "$_title: reported" --workspace "$ws" 2>/dev/null || true
+      fi
+    fi
+  done < "$reg"
+
+  # Write current state (never fatal)
+  { printf '%s\n' "$pill"; printf '%s' "$cur_reported_titles"; } > "$state_file" 2>/dev/null || true
 }
 
 # sub_sync_clear <team> — shorthand for close path in team.sh
