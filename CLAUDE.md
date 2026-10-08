@@ -25,9 +25,10 @@ quote it word-for-word — they never restate it in their own words.
 1. Edit the **owner** file above.
 2. Grep the repo for the old wording and update or delete the copies.
 3. Run `bash team.sh doccheck` — it flags retired drift phrases
-   (`inherit the lead`, `stacked`, `3–5`), confirms every subcommand is
-   documented in the `team.sh` header, and confirms every `--flag` in
-   `SKILL.md`'s argument-hint is explained in `HELP.md`. Fix what it reports.
+   (`inherit the lead`, `stacked`, `3–5`, `--tmux`, `tmux pane`, `tmux session`,
+   `tmux attach`), confirms every subcommand is documented in the `team.sh` header,
+   and confirms every `--flag` in `SKILL.md`'s argument-hint is explained in `HELP.md`.
+   Fix what it reports.
 
 Deterministic checks belong in a hook, not prose. `.githooks/pre-commit` runs
 `doccheck`; enable it with `git config core.hooksPath .githooks`. Where a global

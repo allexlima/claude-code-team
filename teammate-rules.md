@@ -33,7 +33,14 @@ the slowest teammate sets the pace for the whole team.
 - **Send questions to the lead, not your own pane.** When you need the user's input, a
   decision, or sign-off on an approach, do NOT use AskUserQuestion or wait silently in your
   pane — the user is not watching it. SendMessage the lead a message whose first line is
-  `NEEDS INPUT`, then: the question on one line, 2–4 concrete options (or `free-form`), and
-  your recommendation. Wait for the lead's reply with the decision, then continue. (This is
-  for *questions you choose to ask*; the CLI's own tool-permission prompts are handled in
-  your pane and are not forwarded.)
+  `NEEDS INPUT`, then: the question on one line, 2–4 concrete options, and your
+  recommendation — **put the recommended option first** so the lead can relay the options
+  to the user without reordering. Wait for the lead's reply with the decision, then
+  continue. (This is for *questions you choose to ask*; the CLI's own tool-permission
+  prompts are handled in your pane and are not forwarded.)
+- **Notify when reporting or sending NEEDS INPUT.** After writing your report and
+  SendMessage-ing the lead, run:
+  `cmux notify --title "<team>-<role>" --body "report ready"` (or
+  `cmux notify --title "<team>-<role>" --body "NEEDS INPUT: <one-line summary>"` for
+  questions). This lights the ring and badge so the lead and user see it immediately.
+  Skip silently if cmux is not available (--inline mode).

@@ -17,24 +17,22 @@ and writes the final synthesis.
                      puts every role in dontAsk and is refused on build runs.
                      Default: the lead picks a model per role (see Choosing models)
     --tabs           One cmux tab per teammate instead of panes
-    --tmux           Force tmux even inside cmux
     --no-gate        Build runs: skip no-mistakes (commits stay local, no push/PR)
     --no-caveman     Teammates write normal prose instead of caveman terse style
     --autoclose      Close the team right after the final synthesis
-    --inline         No panes: teammates run as in-session subagents
-    --monitor        Open an auto-refreshing status pane (or a new tab when no active cmux
-                     surface) showing each teammate's milestone, current step, and flags
-                     (STALLED?/MODEL_GONE/DEAD/PARKED/PROMPT). Not counted toward the teammate
-                     cap; closed with the team. Without a cmux/tmux backend, prints the watch
-                     command instead. Ignored under --inline (no registry to read).
+    --inline         No panes: teammates run as in-session subagents (no cmux required)
+    --monitor        Open an auto-refreshing status pane showing each teammate's milestone,
+                     current step, and flags. Not counted toward the teammate cap; closed
+                     with the team. Ignored under --inline (no registry to read).
     --help           Show this help
 
 ## Before spawning
-Every run starts with the lead brainstorming the task with you: it re-reads the earlier
-conversation, `.team/facts.md` and the last run's synthesis, asks whatever questions
-change the work, then writes back the task, the roles, what is out of scope and how the
-result gets verified. Teammates spawn only after you approve that — a wrong assumption
-otherwise gets paid once per teammate.
+Every run starts with the lead closing any leftover teammates from earlier runs (it
+lists them for your approval first), then brainstorming the task with you: it re-reads the
+earlier conversation, `.team/facts.md` and the last run's synthesis, asks whatever
+questions change the work, then writes back the task, the roles, what is out of scope and
+how the result gets verified. Teammates spawn only after you approve that — a wrong
+assumption otherwise gets paid once per teammate.
 
 ## Choosing roles
 - List them in the task (`Roles: security: …, perf: …, skeptic: …`) — used as-is.
@@ -119,10 +117,25 @@ On a new machine the shared library starts empty until you sync it.
 
 ## Where teammates appear
     In cmux (default)   Your tab splits: you on the left, teammates in a two-column
-                        grid on the right; idle ones fold away into tabs
+                        grid on the right; idle ones fold away into tabs.
+                        cmux is required for pane modes. Install: https://cmux.dev
     cmux + --tabs       A new tab per teammate in the current workspace
-    Inside tmux         Panes split from your current window
-    Neither             Detached tmux session — run: tmux attach -t team-<team>
+    --inline            No panes: teammates run as subagents inside your session.
+                        Works without cmux.
+
+## Progress (cmux sidebar)
+The lead workspace shows a live status pill and progress bar: phase (spawning /
+working / challenge / synthesizing) and "N/M reported". Events are logged to the
+cmux event stream so you can scroll back. A badge and ring light up when any
+teammate reports or sends a question — the notification comes from `cmux notify`
+inside that teammate. `--monitor` adds a detailed status pane (see below).
+
+## Cleanup: team.sh reap [--yes]
+At the start of every run the lead lists any leftover teammates from earlier runs
+of this project and asks you to confirm before closing them. You can also run
+`team.sh reap` at any time to see the list, or `team.sh reap --yes` to close them
+without prompting. Only teammates whose registry row records this project's root are
+touched; live teams in other projects are never affected.
 
 ## Examples
     /team review PR #42 for security, performance and test coverage
@@ -140,8 +153,9 @@ On a new machine the shared library starts empty until you sync it.
   (Haiku-tier teammates run in dontAsk mode and don't prompt; denied tools appear in
   their report.)
 - A teammate that needs your input or a decision forwards the question to the lead via
-  NEEDS INPUT; you answer it in the lead pane (with options) and the lead relays it
-  back — so you don't have to visit each pane.
+  NEEDS INPUT with options and a recommendation; you answer it in the lead pane (with the
+  recommended option presented first) and the lead relays it back — so you don't have
+  to visit each pane. The lead always uses AskUserQuestion for your input.
 - Build-run worktrees are pre-trusted, so they no longer prompt. A folder you have
   never opened with Claude can still show a trust prompt the first time.
 - `.team/runs/<date>-<team>/tasks.md` tracks each role's status.
@@ -152,9 +166,8 @@ On a new machine the shared library starts empty until you sync it.
     MODEL_GONE   Its model is no longer available — respawn with a different model
     DEAD         Session exited — respawn it
     PARKED       Folded into a tab; session is still running
-    PROMPT       Waiting for tool approval in its pane (never shown for haiku/GLM/Kimi or parked)
-  With `--monitor`, this view opens automatically in a status pane (or new tab when no
-  active cmux surface) and refreshes every 30 s (override with `TEAM_STATUS_INTERVAL`).
+  With `--monitor`, this view opens automatically in a status pane and refreshes
+  every 30 s (override with `TEAM_STATUS_INTERVAL`).
   Under `--inline` there is no registry; track teammates by their returned reports and tasks.md.
 - Say "shut down the team" to close all teammate panes/tabs (the run record stays;
   clean worktrees are removed, branches and PRs stay).

@@ -1,6 +1,6 @@
 # /team — agent teams for Claude Code, in your terminal panes
 
-A [Claude Code](https://code.claude.com) skill that runs a **team of Claude sessions** on one task — each teammate a full, interactive `claude` session in its own titled [cmux](https://cmux.dev) / tmux pane — with a lead that plans roles, runs challenge rounds where teammates try to disprove each other, and synthesizes what survived.
+A [Claude Code](https://code.claude.com) skill that runs a **team of Claude sessions** on one task — each teammate a full, interactive `claude` session in its own titled [cmux](https://cmux.dev) pane — with a lead that plans roles, runs challenge rounds where teammates try to disprove each other, and synthesizes what survived.
 
 It emulates Claude Code's experimental [agent teams](https://code.claude.com/docs/en/agent-teams) using only standard features (interactive sessions, cross-session messaging, subagents), so it works even where native agent teams are disabled.
 
@@ -38,7 +38,7 @@ That's it — start (or restart) Claude Code and run `/team --help`.
 
 | | |
 |---|---|
-| Required | [Claude Code](https://code.claude.com), `python3`, and **cmux** or **tmux** for panes (or use `--inline` for no panes) |
+| Required | [Claude Code](https://code.claude.com), `python3`, and **[cmux](https://cmux.dev)** for panes (or use `--inline` for no panes) |
 | Build runs | `git`, an `origin` remote, [no-mistakes](https://github.com/kunchenguid/no-mistakes) (optional — without it, commits just stay local) |
 | Optional | [caveman](https://github.com/JuliusBrussee/caveman) installed at `~/.agents/skills/caveman` (skipped if absent) |
 
@@ -82,7 +82,7 @@ When you're done, say **"shut down the team"**.
 - **Tool-permission prompts appear in each teammate's own pane** — teammate *questions*, by contrast, are forwarded to the lead, who relays them to you in one place. Haiku-tier models (including behaves-as-haiku ones like GLM/Kimi) run unattended in dontAsk mode with a per-teammate allowlist (Read/Glob/Grep, SendMessage/ListAgents, Bash: git status/ls/wc/facts-lint, Edit on own report+tasks.md+status) on review runs; denied tools show up in their report.
 - **First time in a folder**, each pane shows Claude's workspace-trust prompt (folders inside a trusted project are already trusted).
 - **Build runs publish** (push + PR per teammate); the lead always asks before spawning them.
-- Tested on macOS with cmux and tmux.
+- Tested on macOS with cmux.
 
 ## License
 
