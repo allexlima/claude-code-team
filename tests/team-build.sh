@@ -190,17 +190,24 @@ _mkrun() {
 
 # ══════════════════════════════════════════════════════════════════
 # bug#2f — zero-commit repo + --worktree refused (exit 2)
+# Must not open a new pane: check for absence of new-split/new-surface
+# in cmux log (identify calls from _reg_prune/_alive are OK to have).
+# Unique team slug avoids registry cross-contamination from earlier cases.
 # ══════════════════════════════════════════════════════════════════
 {
   R="$W/b2f"; _mkgit0 "$R"
   pf="$W/p_b2f.md"; printf 'prompt\n' > "$pf"
+  TM="b2f$$"
   _reset_logs
-  out=$(cd "$R" && bash "$TEAM_SH" spawn --worktree myteam myrole "$pf" \
+  out=$(cd "$R" && bash "$TEAM_SH" spawn --worktree "$TM" myrole "$pf" \
     sonnet 2>&1) && rc=0 || rc=$?
-  [ "$rc" != 0 ] && [ ! -s "$CMUX_LOG" ] \
-    && pass "bug#2f: zero-commit repo + --worktree refused before cmux" \
-    || fail "bug#2f: zero-commit repo + --worktree refused before cmux" \
-       "rc=$rc cmuxlog=$(cat "$CMUX_LOG")"
+  rm -f "/tmp/team-$TM.tabs"
+  # No new pane should have been opened (identify calls are OK; new-split/new-surface are not)
+  grep -qE 'new-split|new-surface' "$CMUX_LOG" 2>/dev/null && pane_opened=1 || pane_opened=0
+  [ "$rc" != 0 ] && [ "$pane_opened" = 0 ] \
+    && pass "bug#2f: zero-commit repo + --worktree refused (no pane opened)" \
+    || fail "bug#2f: zero-commit repo + --worktree refused (no pane opened)" \
+       "rc=$rc pane_opened=$pane_opened cmux=$(cat "$CMUX_LOG")"
 }
 
 # ══════════════════════════════════════════════════════════════════
@@ -259,30 +266,33 @@ _mkrun() {
     || fail "design-B: pick-model badtier → exit 2" "rc=$rc"
 }
 
-# pick-model fallback: create a stub with only haiku, ask for sonnet → exit 1 + stderr
+# pick-model fallback: only haiku in model list → sonnet falls back, exit 1
+# Use TEAM_MODELS_FILE so managed-settings.json is bypassed entirely.
 {
-  mkdir -p "$W/fallback_home/.claude"
-  cat > "$W/fallback_home/.claude/settings.json" <<'JSON'
+  cat > "$W/fallback_models.json" <<'JSON'
 {"modelPicker":{"options":[
   {"model":"system.ai.claude-haiku-4-5","behavesAs":"haiku"}
 ]}}
 JSON
-  out=$(HOME="$W/fallback_home" TEAM_ROLES_DIR="$W/fallback_home/.claude/team/roles" \
+  out=$(TEAM_MODELS_FILE="$W/fallback_models.json" \
     bash "$TEAM_SH" pick-model sonnet 2>&1) && rc=0 || rc=$?
   [ "$rc" = 1 ] && pass "design-B: pick-model falls back one tier (exit 1)" \
     || fail "design-B: pick-model falls back one tier (exit 1)" "rc=$rc out=${out:0:120}"
 }
 
-# pick-model exit 3 when nothing matches (empty model list)
+# pick-model exit 3 when no claude-family match at all (only non-claude models)
+# Empty options: [] still falls back to built-in aliases, so use glm-only list instead.
 {
-  mkdir -p "$W/empty_home/.claude"
-  cat > "$W/empty_home/.claude/settings.json" <<'JSON'
-{"modelPicker":{"options":[]}}
+  cat > "$W/nonclaude_models.json" <<'JSON'
+{"modelPicker":{"options":[
+  {"model":"system.ai.glm-5-3","behavesAs":"haiku"},
+  {"model":"system.ai.glm-5-2","behavesAs":"haiku"}
+]}}
 JSON
-  out=$(HOME="$W/empty_home" TEAM_ROLES_DIR="$W/empty_home/.claude/team/roles" \
+  out=$(TEAM_MODELS_FILE="$W/nonclaude_models.json" \
     bash "$TEAM_SH" pick-model sonnet 2>&1) && rc=0 || rc=$?
-  [ "$rc" = 3 ] && pass "design-B: pick-model → exit 3 when no models" \
-    || fail "design-B: pick-model → exit 3 when no models" "rc=$rc"
+  [ "$rc" = 3 ] && pass "design-B: pick-model → exit 3 when no claude-family model" \
+    || fail "design-B: pick-model → exit 3 when no claude-family model" "rc=$rc out=${out:0:80}"
 }
 
 # ══════════════════════════════════════════════════════════════════
