@@ -174,8 +174,8 @@ team. Requires cmux; skipped under --inline.
     PARKED       Folded into a tab; session is still running
   With `--monitor`, this view opens automatically in a status pane and refreshes
   every 30 s (override with `TEAM_STATUS_INTERVAL`). Requires cmux.
-  Under `--inline`, `--monitor` is ignored; run `team.sh status <team>` yourself
-  or track teammates by their returned reports and tasks.md.
+  Under `--inline`, `--monitor` is ignored; track teammates by their returned
+  reports and tasks.md.
 - Say "shut down the team" to close all teammate panes/tabs (the run record stays;
   clean worktrees are removed, branches and PRs stay).
 
