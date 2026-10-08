@@ -20,8 +20,9 @@ the slowest teammate sets the pace for the whole team.
 - **Report what you parallelised** on the PARALLELISM line of your report, so the lead
   can see it happened.
 - **Cap at 4 concurrent subagents per dispatch.** Dispatch at most 4 agents in a single
-  message. A 5th concurrent Agent call is rejected at launch and silently never runs — so
-  dispatch in batches of 4, wait for all 4 to return, then dispatch the next batch.
+  message. A 5th concurrent Agent call fails at launch with "Concurrent subagent limit
+  reached"; it never runs. Dispatch in batches of 4, wait for all 4 to return, then
+  dispatch the next batch.
   Verify that every subagent you dispatched actually returned a notification before
   treating its work as done. Each subagent call should pass a `model` (sonnet by
   default; use a cheaper model only for purely mechanical sweeps such as grep, cat, or count).
@@ -33,7 +34,14 @@ the slowest teammate sets the pace for the whole team.
 - **Send questions to the lead, not your own pane.** When you need the user's input, a
   decision, or sign-off on an approach, do NOT use AskUserQuestion or wait silently in your
   pane — the user is not watching it. SendMessage the lead a message whose first line is
-  `NEEDS INPUT`, then: the question on one line, 2–4 concrete options (or `free-form`), and
-  your recommendation. Wait for the lead's reply with the decision, then continue. (This is
-  for *questions you choose to ask*; the CLI's own tool-permission prompts are handled in
-  your pane and are not forwarded.)
+  `NEEDS INPUT`, then: the question on one line, 2–4 concrete options, and your
+  recommendation — **put the recommended option first** so the lead can relay the options
+  to the user without reordering. Wait for the lead's reply with the decision, then
+  continue. (This is for *questions you choose to ask*; the CLI's own tool-permission
+  prompts are handled in your pane and are not forwarded.)
+- **Notify when reporting or sending NEEDS INPUT.** After writing your report and
+  SendMessage-ing the lead, run:
+  `cmux notify --title "<team>-<role>" --body "report ready"` (or
+  `cmux notify --title "<team>-<role>" --body "NEEDS INPUT: <one-line summary>"` for
+  questions). This lights the ring and badge so the lead and user see it immediately.
+  Skip silently if cmux is not available (--inline mode).
