@@ -99,13 +99,13 @@ col9() { awk -v t="$T-$1" '$4==t {print $9}' "$REG"; }
 # ═══ F1-F5: finish refuses (exit 2) and changes nothing — decisions 12, 29 ═══
 fixture f1; row surface:11 w; tick w; before=$(cat "$REG")
 out=$(fin w); rc=$?
-{ [ $rc = 2 ] && [ "$(cat "$REG")" = "$before" ] && ! grep -q close-surface "$CMUX_LOG"; } \
+{ [ $rc = 2 ] && grep -q "finish: refused" <<<"$out" && [ "$(cat "$REG")" = "$before" ] && ! grep -q close-surface "$CMUX_LOG"; } \
   && pass "F1: finish refuses (rc 2, row untouched, no close) when the report is missing (decision 29)" \
   || fail "F1: missing report" "rc=$rc out=$out"
 
 fixture f2; row surface:12 w; tick w; : > "$RUN/reports/w.md"
 out=$(fin w); rc=$?
-{ [ $rc = 2 ] && [ "$(col9 w)" = live ]; } && pass "F2: finish refuses an empty report (decision 29)" || fail "F2: empty report" "rc=$rc out=$out"
+{ [ $rc = 2 ] && grep -q "finish: refused" <<<"$out" && [ "$(col9 w)" = live ]; } && pass "F2: finish refuses an empty report (decision 29)" || fail "F2: empty report" "rc=$rc out=$out"
 
 fixture f3; row surface:13 w; tick w; printf '# Report\nFINDINGS: half written\n' > "$RUN/reports/w.md"
 out=$(fin w); rc=$?
@@ -139,7 +139,7 @@ rm "$WT/uncommitted.txt"; TREE="surface:16	$T-w"; out=$(fin w); rc=$?
 fixture f6c; WT="$R/.team/worktrees/$T-w"; mkdir -p "$WT"   # under the worktrees dir but NOT a git worktree: git status fails
 row surface:17 w live "$SID" "$WT"; report w; tick w
 out=$(fin w); rc=$?
-{ [ $rc = 2 ] && [ "$(col9 w)" = live ]; } \
+{ [ $rc = 2 ] && grep -q "finish: refused" <<<"$out" && [ "$(col9 w)" = live ]; } \
   && pass "F6c: git status failing in the worktree fails closed (rc 2, row untouched)" || fail "F6c: git status failure" "rc=$rc out=$out"
 
 # ═══ F7-F9: success path and ordering — decision 29 (marker BEFORE close, retryable) ═══
@@ -183,7 +183,7 @@ printf 'PARALLELISM: 2 subagents\n' >> "$RUN/reports/w.md"
 TREE="$ref	$T-w"; out=$(fin w); rc=$?
 { [ $rc = 0 ] && [ "$(col9 w)" = finished ]; } \
   && pass "F10d: round 2 — an append WITH a new PARALLELISM: is accepted" || fail "F10d: append with PARALLELISM" "rc=$rc out=$out"
-[ ! -f "$rnd" ] && pass "F10e: finish removes the .round sidecar once it succeeds" || fail "F10e: sidecar removed"
+{ [ "$(col9 w)" = finished ] && [ ! -f "$rnd" ]; } && pass "F10e: finish removes the .round sidecar once it succeeds" || fail "F10e: sidecar removed"
 
 # ═══ F11: spawn --resume (decisions 9, 32, 33, 53-58) ═══
 fixture f11; row surface:31 w finished "$SID" "$R"; printf 'next round: do X\n' > "$RUN/prompts/w.md"
@@ -221,7 +221,7 @@ CMUX_GONE_REFS= out=$(tm bash "$TEAM_SH" spawn "$T" w "$RUN/prompts/w.md" sonnet
 # ═══ F13: a spawn whose split fails keeps the old finished row (decision 60) ═══
 fixture f13; row surface:51 w finished; printf 'p\n' > "$RUN/prompts/w.md"; before=$(cat "$REG")
 out=$(tm env CMUX_SPLIT_FAIL=1 bash "$TEAM_SH" spawn --resume "$T" w "$RUN/prompts/w.md" sonnet 2>&1); rc=$?
-{ [ $rc != 0 ] && [ "$(cat "$REG")" = "$before" ]; } \
+{ [ $rc != 0 ] && grep -q "split failed" <<<"$out" && [ "$(cat "$REG")" = "$before" ]; } \
   && pass "F13: a failed new-split leaves the finished row (and its session id) intact (decision 60)" \
   || fail "F13: failed spawn keeps row" "rc=$rc reg=$(cat "$REG")"
 
