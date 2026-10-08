@@ -97,7 +97,9 @@ forces one model everywhere; a haiku-tier id puts every role in dontAsk and is r
   code, paths and errors unchanged. The lead's summary to you stays normal prose.
 
 ## Later rounds: resumed teammates
-A finished teammate's session id is recorded, so a later round resumes that session
+A teammate is finished as soon as its report is verified, and every later round resumes it
+(one resume spin-up per teammate per round, so a teammate exists only while it works). Its
+session id is recorded, so a later round resumes that session
 (`team.sh spawn --resume`; it keeps its full context) and falls back to a fresh teammate that
 reads its earlier report when no session is recorded or its directory is gone. Shutting the
 team down (`close`) drops finished rows, so nothing can be resumed afterwards.
