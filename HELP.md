@@ -164,7 +164,7 @@ team. Requires cmux; skipped under --inline.
 - Teammate *tool-permission* prompts appear in *their* pane — approve them there.
   **Known limitation:** a prompt produces no notification, so the status pane cannot flag
   it. The teammate shows `WORKING` for about 10 minutes, then `STALLED?`. If a teammate has
-  been quiet that long, look in its pane (ask the lead to `show` it) before assuming a bug.
+  been quiet that long, look in its pane (titled `<team>-<role>`) before assuming a bug.
   (Haiku-tier teammates run in dontAsk mode and don't prompt; denied tools appear in
   their report.)
 - A teammate that needs your input or a decision forwards the question to the lead via
@@ -182,7 +182,7 @@ team. Requires cmux; skipped under --inline.
   disk and the registry.
     STALLED?     No update in a while — check its pane or message it
     WAITING      AskUserQuestion notification detected — teammates must not use this;
-                 show the pane and SendMessage it to send NEEDS INPUT to the lead instead.
+                 look at its pane and SendMessage it to send NEEDS INPUT to the lead instead.
                  Not shown for haiku/dontAsk tier.
                  A tool-permission prompt is NOT flagged (only STALLED? later) — see the
                  known limitation above.
