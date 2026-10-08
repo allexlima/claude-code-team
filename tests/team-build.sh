@@ -63,6 +63,8 @@ case "$1" in
     echo "$jout"
     ;;
   rename-workspace|rename-tab|tab-title|move-surface|workspace-title|new-split-*) true ;;
+  # rev5: sidebar/notify verbs are only logged (args asserted via $CMUX_LOG), never executed
+  set-status|clear-status|set-progress|clear-progress|log|notify) true ;;
 esac
 SH
 chmod +x "$W/bin/cmux"
@@ -75,6 +77,8 @@ chmod +x "$W/bin/claude"
 
 export PATH="$W/bin:$PATH"
 export CMUX_LOG CLAUDE_LOG
+# Run from inside a teammate pane TEAM_MEMBER is inherited and makes lead-title a no-op (rev4-3).
+unset TEAM_MEMBER
 
 # ── Stub model list via HOME override ──
 mkdir -p "$W/home/.claude/team/roles"
@@ -784,7 +788,7 @@ JSON
 
 # ══════════════════════════════════════════════════════════════════
 # rev4-4 — spawn: --name and TEAM_MEMBER in spawned claude cmd
-# Registry row has 8 cols, col 8 = project root.
+# Registry row has 11 cols (rev5): col 8 = project root, then state, session-id, cwd.
 # ══════════════════════════════════════════════════════════════════
 {
   R="$W/rv4"; _mkgit "$R"
@@ -807,9 +811,23 @@ JSON
   row=$(cat "$TEAM_REG_DIR/team-$TM.tabs" 2>/dev/null | head -1)
   cols=$(printf '%s\n' "$row" | awk '{print NF}')
   rm -f "$TEAM_REG_DIR/team-$TM.tabs"
-  [ "$cols" = 8 ] \
-    && pass "rev4-4: registry row has 8 cols (includes project root)" \
-    || fail "rev4-4: registry row has 8 cols" "cols=$cols row=$row"
+  # rev5 (decisions 26, 37, 46): 11 cols; the new ones come AFTER root (col 8). Assert real values,
+  # not "-" placeholders: _row_root falls back to deriving root from col 7, so a placeholder fixture
+  # would still pass against misordered columns.
+  [ "$cols" = 11 ] \
+    && pass "rev5-4: registry row has 11 cols (root=8, state=9, session-id=10, cwd=11)" \
+    || fail "rev5-4: registry row has 11 cols" "cols=$cols row=$row"
+  c8=$(awk '{print $8}' <<<"$row"); c9=$(awk '{print $9}' <<<"$row")
+  c10=$(awk '{print $10}' <<<"$row"); c11=$(awk '{print $11}' <<<"$row")
+  Rp=$(cd "$R" && pwd -P)   # root is stored physical (/private/var/… on macOS); cwd is $PWD as given
+  [ "$c8" = "$Rp" ] && [ "$c9" = live ] \
+    && printf '%s' "$c10" | grep -Eq '^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$' \
+    && [ "$c11" = "$R" ] \
+    && pass "rev5-4: cols 8-11 = root, live, uuid, spawn cwd (all real values)" \
+    || fail "rev5-4: cols 8-11 = root, live, uuid, cwd" "row=$row"
+  grep -Eq -- "claude --session-id [0-9a-f-]{36} --name" "$CMUX_LOG" \
+    && pass "rev5-4: spawned claude cmd carries --session-id <uuid>" \
+    || fail "rev5-4: spawned claude cmd carries --session-id" "cmux=$(grep -- '--name' "$CMUX_LOG" || echo '(not found)')"
 }
 
 # rev4-4b: registry col 8 (root) is the main checkout root, not the worktree
