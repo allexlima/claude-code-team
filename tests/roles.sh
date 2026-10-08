@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Hermetic tests for lib/roles.sh.
 # Sources roles.sh directly with stub helpers; never opens a real pane.
+# Owned by rev3-tests from this commit forward; roles-impl stops editing here.
 #   bash tests/roles.sh
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
@@ -39,7 +40,21 @@ write_role() {  # write_role <dir> <name> <content>
 }
 
 # ---------------------------------------------------------------------------
-# 1. sub_role — resolution order and stderr note
+# 1. _validate_role_name — kebab-case, reserved names, hyphen rules (N10)
+# ---------------------------------------------------------------------------
+for bad in '' '-leading' 'trailing-' 'a--b' 'monitor'; do
+  _validate_role_name "$bad" 2>/dev/null && rc=0 || rc=$?
+  [ $rc = 3 ] && pass "_validate_role_name: rejects '$bad'" \
+    || fail "_validate_role_name: rejects '$bad'" "rc=$rc"
+done
+for good in 'a' 'my-role' 'abc123' 'role-v2'; do
+  _validate_role_name "$good" 2>/dev/null && rc=0 || rc=$?
+  [ $rc = 0 ] && pass "_validate_role_name: accepts '$good'" \
+    || fail "_validate_role_name: accepts '$good'" "rc=$rc"
+done
+
+# ---------------------------------------------------------------------------
+# 2. sub_role — resolution order and stderr note
 # ---------------------------------------------------------------------------
 setup
 write_role "$W/repo/.team/roles" mytestrole "# Project role"
@@ -55,9 +70,11 @@ write_role "$W/lib" libonly "# Library only"
 
 stderr=$(sub_role libonly 2>&1 >/dev/null) && true || true
 out=$(sub_role libonly 2>/dev/null) && rc=0 || rc=$?
-[ $rc = 0 ] && [ "$out" = "$W/lib/libonly.md" ] && [[ "$stderr" == *"resolved from shared library"* ]] \
-  && pass "sub_role: library fallback + stderr note (N14)" \
-  || fail "sub_role: library fallback + stderr note (N14)" "rc=$rc out=$out stderr=$stderr"
+[ $rc = 0 ] && [ "$out" = "$W/lib/libonly.md" ] \
+  && [[ "$stderr" == *"resolved from shared library"* ]] \
+  && [[ "$stderr" == *"run role-pull before editing"* ]] \
+  && pass "sub_role: library fallback + full stderr note (N14)" \
+  || fail "sub_role: library fallback + full stderr note (N14)" "rc=$rc out=$out stderr=$stderr"
 
 setup
 out=$(sub_role gone 2>&1) && rc=0 || rc=$?
@@ -65,11 +82,15 @@ out=$(sub_role gone 2>&1) && rc=0 || rc=$?
   || fail "sub_role: exit 3 when not found" "rc=$rc"
 
 out=$(sub_role "bad name" 2>&1) && rc=0 || rc=$?
-[ $rc = 2 ] && pass "sub_role: exit 2 on non-kebab name" \
-  || fail "sub_role: exit 2 on non-kebab name" "rc=$rc"
+[ $rc = 3 ] && pass "sub_role: exit 3 on non-kebab name" \
+  || fail "sub_role: exit 3 on non-kebab name" "rc=$rc"
+
+out=$(sub_role "monitor" 2>&1) && rc=0 || rc=$?
+[ $rc = 3 ] && pass "sub_role: exit 3 on reserved name 'monitor' (N10)" \
+  || fail "sub_role: exit 3 on reserved name 'monitor' (N10)" "rc=$rc"
 
 # ---------------------------------------------------------------------------
-# 2. sub_roles — status column
+# 3. sub_roles — status column
 # ---------------------------------------------------------------------------
 setup
 write_role "$W/repo/.team/roles" both "# same content"
@@ -119,7 +140,7 @@ out=$(sub_roles)
   || fail "sub_roles: diverged (no base)" "out=$out"
 
 # ---------------------------------------------------------------------------
-# 3. sub_role_pull
+# 4. sub_role_pull
 # ---------------------------------------------------------------------------
 
 # fresh pull (no local copy)
@@ -130,11 +151,11 @@ out=$(sub_role_pull myrole 2>&1) && rc=0 || rc=$?
   && pass "sub_role_pull: fresh pull writes dst and .base/" \
   || fail "sub_role_pull: fresh pull" "rc=$rc out=$out"
 
-# already up-to-date
+# already up-to-date → exit 0
 out=$(sub_role_pull myrole 2>&1) && rc=0 || rc=$?
-[ $rc = 1 ] && [[ "$out" == *"already up-to-date"* ]] \
-  && pass "sub_role_pull: exit 1 when already up-to-date" \
-  || fail "sub_role_pull: exit 1 already up-to-date" "rc=$rc out=$out"
+[ $rc = 0 ] && [[ "$out" == *"already up-to-date"* ]] \
+  && pass "sub_role_pull: exit 0 when already up-to-date" \
+  || fail "sub_role_pull: exit 0 already up-to-date" "rc=$rc out=$out"
 
 # fast-forward: local unchanged, library updated
 setup
@@ -178,8 +199,15 @@ out=$(sub_role_pull notexist 2>&1) && rc=0 || rc=$?
 [ $rc = 3 ] && pass "sub_role_pull: exit 3 when not in library" \
   || fail "sub_role_pull: exit 3" "rc=$rc"
 
+# exit 3 on bad option
+setup
+write_role "$W/lib" myrole "# ok"
+out=$(sub_role_pull myrole --no-such-flag 2>&1) && rc=0 || rc=$?
+[ $rc = 3 ] && pass "sub_role_pull: exit 3 on unknown option" \
+  || fail "sub_role_pull: exit 3 unknown option" "rc=$rc"
+
 # ---------------------------------------------------------------------------
-# 4. sub_role_promote
+# 5. sub_role_promote
 # ---------------------------------------------------------------------------
 
 # fresh promote (library copy absent)
@@ -190,11 +218,11 @@ out=$(sub_role_promote myrole 2>&1) && rc=0 || rc=$?
   && pass "sub_role_promote: fresh promote writes lib and .base/" \
   || fail "sub_role_promote: fresh promote" "rc=$rc out=$out"
 
-# already up-to-date
+# already up-to-date → exit 0
 out=$(sub_role_promote myrole 2>&1) && rc=0 || rc=$?
-[ $rc = 1 ] && [[ "$out" == *"already up-to-date"* ]] \
-  && pass "sub_role_promote: exit 1 when already up-to-date" \
-  || fail "sub_role_promote: exit 1" "rc=$rc"
+[ $rc = 0 ] && [[ "$out" == *"already up-to-date"* ]] \
+  && pass "sub_role_promote: exit 0 when already up-to-date" \
+  || fail "sub_role_promote: exit 0 already up-to-date" "rc=$rc out=$out"
 
 # fast-forward: library unchanged since base, local has new content
 setup
@@ -252,7 +280,7 @@ out=$(sub_role_promote notexist 2>&1) && rc=0 || rc=$?
 [ $rc = 3 ] && pass "sub_role_promote: exit 3 when not in project" \
   || fail "sub_role_promote: exit 3" "rc=$rc"
 
-# secret/PII guard — exit 2
+# secret/PII guard — exit 2 (email pattern: detected but not a real secret)
 setup
 printf '# role\ncontact=user@example.com\n' > "$W/repo/.team/roles/badpii.md"
 out=$(sub_role_promote badpii 2>&1) && rc=0 || rc=$?
