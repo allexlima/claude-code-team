@@ -38,7 +38,7 @@ That's it — start (or restart) Claude Code and run `/team --help`.
 
 | | |
 |---|---|
-| Required | [Claude Code](https://code.claude.com), and **cmux** or **tmux** for panes (or use `--inline` for no panes) |
+| Required | [Claude Code](https://code.claude.com), `python3`, and **cmux** or **tmux** for panes (or use `--inline` for no panes) |
 | Build runs | `git`, an `origin` remote, [no-mistakes](https://github.com/kunchenguid/no-mistakes) (optional — without it, commits just stay local) |
 | Optional | [caveman](https://github.com/JuliusBrussee/caveman) installed at `~/.agents/skills/caveman` (skipped if absent) |
 
@@ -72,14 +72,14 @@ When you're done, say **"shut down the team"**.
 .team/                       (git-ignored; pointer added to CLAUDE.local.md, never CLAUDE.md)
 ├── facts.md                 verified findings: fact — evidence — date, run
 ├── roles/<role>.md          project roles (override ~/.claude/team/roles/)
-├── runs/<date>-<team>/      tasks.md · prompts/ · reports/ · synthesis.md
+├── runs/<date>-<team>/      tasks.md · prompts/ · reports/ · status/ · synthesis.md
 └── worktrees/               build-run worktrees
 ```
 
 ## Good to know
 
 - **Cost scales with team size** — every teammate is a full Claude session. 2–3 sharp roles beat 5 vague ones.
-- **Tool-permission prompts appear in each teammate's own pane** — teammate *questions*, by contrast, are routed to the lead. Haiku-tier models (including behaves-as-Haiku ones like GLM/Kimi) fall back to prompting mode rather than auto, so don't use them for roles meant to run unattended.
+- **Tool-permission prompts appear in each teammate's own pane** — teammate *questions*, by contrast, are forwarded to the lead, who relays them to you in one place. Haiku-tier models (including behaves-as-haiku ones like GLM/Kimi) run unattended in dontAsk mode with a per-teammate allowlist (Read/Glob/Grep, SendMessage/ListAgents, Bash: git status/ls/wc/facts-lint, Edit on own report+tasks.md+status) on review runs; denied tools show up in their report.
 - **First time in a folder**, each pane shows Claude's workspace-trust prompt (folders inside a trusted project are already trusted).
 - **Build runs publish** (push + PR per teammate); the lead always asks before spawning them.
 - Tested on macOS with cmux and tmux.
