@@ -598,7 +598,7 @@ fi
 # Exit 1 if anything is off. Edit the owner file (see CLAUDE.md), then re-run.
 if [ "$sub" = doccheck ]; then
   rc=0
-  for pat in 'inherit the lead' 'stacked' '3–5' '2–5' 'as much as possible' '--tmux' 'tmux pane' 'tmux attach' 'tmux session'; do
+  for pat in 'inherit the lead' 'stacked' '3–5' '2–5' 'as much as possible' '--tmux' 'tmux pane' 'tmux attach' 'tmux session' 'team.sh park'; do
     grep -rnF -- "$pat" "$here/SKILL.md" "$here/HELP.md" "$here/README.md" 2>/dev/null && rc=1
   done
   hdr=$(sed '/^set -euo pipefail/q' "$here/team.sh")
