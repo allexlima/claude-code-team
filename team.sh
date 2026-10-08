@@ -15,10 +15,10 @@
 #   team.sh roles               -> list roles available here: "<name>  project|user  <path>"
 #   team.sh role-pull <name> [--force]     -> copy the shared library role into .team/roles/ (records .team/roles/.base/);
 #                                             fast-forwards when the local copy is unchanged since .base/.
-#                                             exit 1 no-op, 2 bad name/option, 3 not in library, 5 conflict (needs --force)
+#                                             exit 0 ok/no-op, 2 PII hit, 3 bad name/not in library, 5 conflict (needs --force)
 #   team.sh role-promote <name> [--force]  -> copy a project role into the shared library, secret/PII scan first;
 #                                             library ahead always refuses (run role-pull).
-#                                             exit 1 no-op, 2 bad name/PII hit, 3 not in project, 5 conflict (needs --force)
+#                                             exit 0 ok/no-op, 2 PII hit, 3 bad name/not in project, 5 conflict (needs --force)
 #   team.sh status [--watch] <team>        -> one row per teammate: ROLE | MILESTONE | STEP | LAST_ACTIVITY | FLAGS;
 #                                             --watch refreshes every 30s (Ctrl-C stops). exit 3 no registry
 #   team.sh monitor <team>                 -> open one small auto-refreshing status pane (layout dash, title
@@ -40,7 +40,7 @@
 # so the workspace-trust prompt does not appear in every pane (a worktree is its own git
 # top-level, so it cannot inherit it).
 # spawn checks before opening anything: the prompt file is readable (made absolute), the role is
-# kebab-case and not the reserved name `monitor`, and the model is listed. Under a lock it then
+# kebab-case (no leading, trailing or double hyphen) and not the reserved name `monitor`, and the model is listed. Under a lock it then
 # drops registry rows whose pane is gone, refuses a live teammate with the same title unless
 # --replace (which closes the old one first), and refuses a 9th teammate (exit 4). The monitor
 # pane (layout dash) does not count toward the 8.
@@ -217,6 +217,19 @@ _reg_prune() {
     if _alive "$b" "$r"; then keep+="$row"$'\n'; fi
   done < "$1"
   printf '%s' "$keep" > "$1.tmp" && mv "$1.tmp" "$1"
+}
+# Registry lock: anything that reads-then-appends the registry holds it. mkdir is atomic; a
+# lock whose holder pid is dead is broken, a live one is waited on for up to 30s, then exit 4.
+# Released on exit.
+_lock() {
+  local lock="$1.lock" i holder
+  for i in $(seq 1 300); do
+    if mkdir "$lock" 2>/dev/null; then echo $$ > "$lock/pid"; trap 'rm -rf "'"$lock"'"' EXIT; return 0; fi
+    holder=$(cat "$lock/pid" 2>/dev/null || true)
+    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then rm -rf "$lock"; continue; fi
+    sleep 0.1
+  done
+  echo "registry lock busy: $lock (another spawn/monitor is running; remove it if not)" >&2; exit 4
 }
 # Distinct titles of teammate rows (layout pane|tab; the dash monitor is not a teammate).
 _mates() { [ -f "$1" ] || return 0; awk '$3=="pane" || $3=="tab" {print $4}' "$1" | sort -u; }
@@ -479,7 +492,7 @@ team=${1:?$spawn_usage} role=${2:?$spawn_usage} pfile=${3:?$spawn_usage} model=$
 # all of them pass. `monitor` is reserved for the status pane (title <team>-monitor), and a
 # leading/trailing hyphen would make a title that collides with another team's.
 case $role in
-  ''|-*|*-|*[!a-z0-9-]*) echo "role names are kebab-case: '$role'" >&2; exit 2 ;;
+  ''|-*|*-|*--*|*[!a-z0-9-]*) echo "role names are kebab-case: '$role'" >&2; exit 2 ;;
   monitor) echo "role name 'monitor' is reserved for the status pane (team.sh monitor)" >&2; exit 2 ;;
 esac
 # The prompt is read with `cat` inside the pane, after `cd` into the teammate's dir, so a
@@ -543,17 +556,8 @@ if submodel=$(_pick_model sonnet 2>/dev/null) && [ -n "$submodel" ]; then :; els
 fi
 
 # Prune + duplicate check + cap + register must not interleave with a parallel spawn of the
-# same team, or two spawns both see 7 teammates. mkdir is atomic; a lock left by a dead
-# spawn is broken, and a live one is waited on for up to 30s.
-lock="$reg.lock"
-for _i in $(seq 1 300); do
-  if mkdir "$lock" 2>/dev/null; then echo $$ > "$lock/pid"; break; fi
-  holder=$(cat "$lock/pid" 2>/dev/null || true)
-  if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then rm -rf "$lock"; continue; fi
-  [ "$_i" = 300 ] && { echo "spawn lock busy: $lock (another spawn for $team is running; remove it if not)" >&2; exit 4; }
-  sleep 0.1
-done
-trap 'rm -rf "$lock"' EXIT
+# same team, or two spawns both see 7 teammates.
+_lock "$reg"
 
 _reg_prune "$reg"
 # A live teammate with this title would be a second session SendMessage cannot tell apart.
