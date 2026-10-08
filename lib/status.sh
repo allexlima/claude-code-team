@@ -27,6 +27,11 @@
 # Module-level state (reset by each _st_table call):
 #   _ST_UUID_MAP   "surface:N=UUID\n…" built from cmux list-panes (one python3 call)
 #   _ST_NOTIF_DATA "UUID|title|subtitle\n…" from cmux list-notifications --json
+#
+# FLAGS column note — WAITING covers AskUserQuestion only (title="Claude question").
+# Tool-approval permission prompts go to `cmux hooks feed`, NOT list-notifications,
+# so a teammate blocked on a permission prompt shows no WAITING flag; STALLED? fires
+# after 10 min of filesystem silence. This is a known gap (probed by rev4-tests).
 
 _ST_UUID_MAP=
 _ST_NOTIF_DATA=
