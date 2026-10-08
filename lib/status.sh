@@ -21,36 +21,6 @@
 #   col 7 absolute run dir or "-" (absent on old rows → "")
 
 # ---------------------------------------------------------------------------
-# Fallbacks for helpers that team.sh may not yet define
-# ---------------------------------------------------------------------------
-
-# _model_gone <model>: returns 0 if model is gone from the org picker.
-# Safe under pipefail: _team_models failure → treat as "not gone" (can't verify).
-if ! declare -f _model_gone >/dev/null 2>&1; then
-  _model_gone() {
-    local m="$1"
-    case "$m" in ''|-|opus|sonnet|haiku) return 1 ;; esac
-    local ids
-    ids=$(_team_models 2>/dev/null | awk -F'\t' '{print $2}') || return 1
-    printf '%s\n' "$ids" | grep -qxF "$m" || return 0
-    return 1
-  }
-fi
-
-# _alive <backend> <ref>: returns 0 if surface/pane still exists.
-if ! declare -f _alive >/dev/null 2>&1; then
-  _alive() {
-    local b="$1" r="$2"
-    case "$b" in
-      cmux) command -v cmux >/dev/null \
-              && [ "$(_pane_of "$r" 2>/dev/null || echo gone)" != gone ] ;;
-      tmux) tmux list-panes -a -F '#{pane_id}' 2>/dev/null | grep -qxF "$r" ;;
-      *)    return 0 ;;
-    esac
-  }
-fi
-
-# ---------------------------------------------------------------------------
 # _st_row <row> <run> <leadpane> <team>: render one registry row as a table line
 # ---------------------------------------------------------------------------
 _st_row() {
@@ -292,14 +262,14 @@ sub_monitor() {
     fi
     ref=$(awk '{print $2}' <<<"$out")
     cmux rename-tab --surface "$ref" "$title" >/dev/null
-    # Register with dash layout; model cols are placeholders (–)
-    printf 'cmux %s dash %s - -\n' "$ref" "$title" >> "$reg"
+    # Register: backend ref layout title model submodel rundir (all 7 cols)
+    printf 'cmux %s dash %s - - -\n' "$ref" "$title" >> "$reg"
     printf 'monitor pane: %s\n' "$title"
   elif [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ]; then
     local id
     id=$(tmux split-window -t "$TMUX_PANE" -d -P -F '#{pane_id}' "$cmd")
     tmux select-pane -t "$id" -T "$title"
-    printf 'tmux %s dash %s - -\n' "$id" "$title" >> "$reg"
+    printf 'tmux %s dash %s - - -\n' "$id" "$title" >> "$reg"
     printf 'monitor pane: %s in tmux\n' "$title"
   else
     # No cmux/tmux backend: print the command for the user to run manually
