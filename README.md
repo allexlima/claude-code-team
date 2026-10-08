@@ -14,7 +14,7 @@ It emulates Claude Code's experimental [agent teams](https://code.claude.com/doc
 
 ## Features
 
-- **One pane per teammate**, titled `<team>-<role>` so you can click in and talk to any of them directly.
+- **One pane per teammate**, titled `<team>-<role>` so you can click in and talk to any of them directly. A pane closes once its report is verified; a status pane opens by default so you can watch the whole team.
 - **Questions centralized in the lead** — a teammate that needs your input forwards it to the lead, which asks you (with options) in one place and relays your answer back, so you answer everything in the lead pane instead of hunting across panes.
 - **Challenge rounds** — each teammate gets the others' findings and must AGREE / DISPUTE / REFINE with evidence. Output: *Consensus · Disputed · Dropped · Next steps*.
 - **Build runs work like a real team** — in a git repo, each teammate gets its own worktree and branch, commits its own work, and gates it through [no-mistakes](https://github.com/kunchenguid/no-mistakes) (review → test → lint → push → PR). One PR per teammate.
@@ -56,7 +56,7 @@ That's it — start (or restart) Claude Code and run `/team --help`.
 /team research vector search options for our RAG demo --tabs --autoclose
 ```
 
-Name roles yourself if you like — `Roles: security: auth + tokens, perf: DB queries, skeptic: challenge the others`. Saved roles load by name — first from the project (`.team/roles/`), then from your shared library (`~/.claude/team/roles/`). Run `/team --help` for the full list of options.
+Name roles yourself if you like — `Roles: security: auth + tokens, perf: DB queries, skeptic: challenge the others`. Saved roles load by name — first from the project (`.team/roles/`), then from your shared library (`~/.claude/team/roles/`). Run `/team --help` for the full list of options (including `--no-monitor`).
 
 When you're done, say **"shut down the team"**.
 
@@ -79,7 +79,7 @@ When you're done, say **"shut down the team"**.
 ## Good to know
 
 - **Cost scales with team size** — every teammate is a full Claude session. 2–3 sharp roles beat 5 vague ones.
-- **Tool-permission prompts appear in each teammate's own pane** — teammate *questions*, by contrast, are forwarded to the lead, who relays them to you in one place. Haiku-tier models (including behaves-as-haiku ones like GLM/Kimi) run unattended in dontAsk mode with a per-teammate allowlist (Read/Glob/Grep, SendMessage/ListAgents, Bash: git status/ls/wc/facts-lint/`cmux notify --title ...`, Edit on own report+tasks.md+status) on review runs; denied tools show up in their report.
+- **Tool-permission prompts appear in each teammate's own pane** (and are a known blind spot of the status pane; see `/team --help`) — teammate *questions*, by contrast, are forwarded to the lead, who relays them to you in one place. Haiku-tier models (including behaves-as-haiku ones like GLM/Kimi) run unattended in dontAsk mode with a per-teammate allowlist (Read/Glob/Grep, SendMessage/ListAgents, Bash: git status/ls/wc/facts-lint/`cmux notify --title ...`, Edit on own report+tasks.md+status) on review runs; denied tools show up in their report.
 - **First time in a folder**, each pane shows Claude's workspace-trust prompt (folders inside a trusted project are already trusted).
 - **Build runs publish** (push + PR per teammate); the lead always asks before spawning them.
 - Tested on macOS with cmux.

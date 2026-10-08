@@ -18,6 +18,7 @@ quote it word-for-word — they never restate it in their own words.
 | Role resolution order | `team.sh role` (code) + `SKILL.md` S2 (one sentence) | `HELP.md` and `README.md` are word-for-word summaries |
 | Role content format (the five headings) | `SKILL.md` (the save-role step) | — |
 | Project facts | `.team/facts.md` only | roles never hold facts; the shared library never holds project content |
+| Live vs. finished teammate state | `SKILL.md` step 4 (one sentence) | `HELP.md` says the same thing in the same words. Hook-based state covers *live* teammates only; a finished one has no surface, so its state is read from disk + registry. Do not "fix" this back to hooks. |
 | Role vs. knowledge | role spec = *how to work* (lens, constraints, tier, lessons); `.team/facts.md` = *what is true here* | neither stores the other |
 
 ## When you change a default, flag, or behaviour
@@ -26,7 +27,7 @@ quote it word-for-word — they never restate it in their own words.
 2. Grep the repo for the old wording and update or delete the copies.
 3. Run `bash team.sh doccheck` — it flags retired drift phrases
    (`inherit the lead`, `stacked`, `3–5`, `--tmux`, `tmux pane`, `tmux session`,
-   `tmux attach`), confirms every subcommand is documented in the `team.sh` header,
+   `tmux attach`, and — once `rev5-core` adds it — `team.sh park`), confirms every subcommand is documented in the `team.sh` header,
    and confirms every `--flag` in `SKILL.md`'s argument-hint is explained in `HELP.md`.
    Fix what it reports.
 

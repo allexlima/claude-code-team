@@ -21,9 +21,11 @@ and writes the final synthesis.
     --no-caveman     Teammates write normal prose instead of caveman terse style
     --autoclose      Close the team right after the final synthesis
     --inline         No panes: teammates run as in-session subagents (no cmux required)
-    --monitor        Open an auto-refreshing status pane showing each teammate's milestone,
-                     current step, and flags. Not counted toward the teammate cap; closed
-                     with the team. Requires cmux; ignored under --inline.
+    --no-monitor     Skip the auto-refreshing status pane that opens by default after the
+                     teammates spawn. The pane shows each teammate's state, current step and
+                     flags, with anything that needs you pinned at the top. Not counted toward
+                     the teammate cap; closed with the team. Never opened under --inline
+                     (no registry to read).
     --help           Show this help
 
 ## Before spawning
@@ -81,9 +83,11 @@ forces one model everywhere; a haiku-tier id puts every role in dontAsk and is r
 
 ## Every teammate
 - Opens in a two-column grid right of the lead, so panes stay readable as the team grows.
-- Its pane folds into a tab while it is idle and comes back as a pane when it works again,
-  so the grid shows only who is working. The session keeps running either way — nothing is
-  killed, and you can watch any teammate again on request. (Panes + cmux only.)
+- Its pane closes when it has reported and the lead has verified the report, so the grid
+  shows only who is working and the finished session frees its memory. Nothing is lost: the
+  report is on disk, and the lead resumes the session (or starts a fresh one that reads the
+  report) if a later round needs that teammate. Finishing is refused unless the report is
+  complete and, on a build run, the worktree has no uncommitted changes.
 - Pane/tab title is fixed to <team>-<role> (Claude's auto-titling is disabled).
 - Starts in auto permission mode (TEAM_PERMISSION_MODE overrides for non-haiku tiers; haiku tier always → dontAsk + per-teammate allowlist, regardless of TEAM_PERMISSION_MODE).
 - Splits its own work across subagents: anything independent (separate files, checks or
@@ -91,6 +95,23 @@ forces one model everywhere; a haiku-tier id puts every role in dontAsk and is r
   it parallelised. It still verifies what the subagents hand back before reporting it.
 - Writes in caveman style (https://github.com/JuliusBrussee/caveman) to save tokens;
   code, paths and errors unchanged. The lead's summary to you stays normal prose.
+
+## Later rounds: resumed teammates
+A teammate is finished as soon as its report is verified, and every later round resumes it
+(one resume spin-up per teammate per round, so a teammate exists only while it works). Its
+session id is recorded, so a later round resumes that session
+(`team.sh spawn --resume`; it keeps its full context) and falls back to a fresh teammate that
+reads its earlier report when no session is recorded or its directory is gone. Shutting the
+team down (`close`) drops finished rows, so nothing can be resumed afterwards.
+Known behaviour to expect:
+- **Edits to `teammate-rules.md` do not reach a resumed teammate.** Claude records the system
+  prompt on the first request and replays it on resume; a changed prompt file is ignored with
+  no error or warning. Anything a resumed teammate must be told differently goes in the lead's
+  message to it. A fresh teammate does read the current rules.
+- The permission mode is re-applied on resume (verified for `--permission-mode`; that the
+  haiku-tier `--allowedTools` allowlist also re-applies is inferred, not observed).
+- Resuming a build-run teammate after `team.sh clean` removed its worktree is refused (its
+  directory is gone), so the lead starts a fresh teammate from its report.
 
 ## Project memory: .team/
 Created at the project root on first run (git-ignored, along with CLAUDE.local.md;
@@ -118,7 +139,7 @@ On a new machine the shared library starts empty until you sync it.
 
 ## Where teammates appear
     In cmux (default)   Your tab splits: you on the left, teammates in a two-column
-                        grid on the right; idle ones fold away into tabs.
+                        grid on the right; finished ones close.
                         cmux is required for pane modes. Install: https://cmux.dev
     cmux + --tabs       A new tab per teammate in the current workspace
     --inline            No panes: teammates run as subagents inside your session.
@@ -129,9 +150,13 @@ The lead workspace shows a live status pill and progress bar: phase (spawning /
 working / done) and "N/M reported". Events are logged to the cmux event stream
 (`cmux log --source team`) so you can scroll back. A badge and ring light up when
 any teammate reports or sends a question — the notification fires from `cmux notify`
-inside that teammate. The lead calls `team.sh sync <team>` to update the sidebar;
-`team.sh sync --clear <team>` removes it when the team closes. `--monitor` adds a
-detailed status pane (see below).
+inside that teammate. A report's notification is best-effort quiet (no macOS banner) and
+NEEDS INPUT keeps the banner; cmux says its notification hooks "can still override" that,
+so treat it as a preference. A report's ring is not a durable signal either, because the
+reporting teammate's pane closes once it is finished — rely on the pill's `N/M reported`.
+The lead calls `team.sh sync <team>` to update the sidebar; `team.sh sync --clear <team>`
+removes it when the team closes. The status pane (see below) opens by default and is the
+detailed view; the sidebar is the glance view.
 
 ## Cleanup: team.sh reap [--yes] [--exclude <team>]
 At the start of every run the lead lists leftover teammates from earlier runs of
@@ -151,10 +176,13 @@ team. Requires cmux; skipped under --inline.
     /team quick sanity review of src/utils.py --roles 2 --inline
 
 ## While it runs
-- Click into any teammate pane to talk to it directly or redirect it. An idle
-  teammate is a tab in your pane rather than a pane of its own — click its tab, or
-  ask the lead to put it back on screen.
+- Click into any teammate pane to talk to it directly or redirect it, or ask the lead to
+  `show` it (brings its pane to the front and moves focus there). A finished teammate has
+  no pane; ask the lead to resume it.
 - Teammate *tool-permission* prompts appear in *their* pane — approve them there.
+  **Known limitation:** a prompt produces no notification, so the status pane cannot flag
+  it. The teammate shows `WORKING` for about 10 minutes, then `STALLED?`. If a teammate has
+  been quiet that long, ask the lead to `show` it (brings its pane to the front) before assuming a bug.
   (Haiku-tier teammates run in dontAsk mode and don't prompt; denied tools appear in
   their report.)
 - A teammate that needs your input or a decision forwards the question to the lead via
@@ -164,22 +192,32 @@ team. Requires cmux; skipped under --inline.
 - Build-run worktrees are pre-trusted, so they no longer prompt. A folder you have
   never opened with Claude can still show a trust prompt the first time.
 - `.team/runs/<date>-<team>/tasks.md` tracks each role's status.
-- Run `team.sh status <team>` to see each teammate's milestone
-  (spawned → investigating → drafting → reported),
-  current step, time since last activity, and flags:
-    STALLED?     No update in a while — check its pane or message it
-    WAITING      AskUserQuestion notification detected — teammates must not use this;
-                 show the pane and SendMessage it to send NEEDS INPUT to the lead instead.
-                 Not shown for haiku/dontAsk tier or parked.
-                 A tool-permission prompt is NOT flagged (only STALLED? later) — show
-                 the pane so the user can approve in it.
-    MODEL_GONE   Its model is no longer available — respawn with a different model
-    DEAD         Session exited — respawn it
-    PARKED       Folded into a tab; session is still running
-  With `--monitor`, this view opens automatically in a status pane and refreshes
-  every 30 s (override with `TEAM_STATUS_INTERVAL`). Requires cmux.
-  Under `--inline`, `--monitor` is ignored; track teammates by their returned
-  reports and tasks.md.
+- Run `team.sh status <team>` to see one frame: a summary line (`<team> · N/M reported ·
+  time`), a progress bar, and a table of ROLE · STATE · STEP · AGE. Each state is a symbol
+  plus a word, so colour is never the only cue; colour is off when output is not a terminal,
+  `NO_COLOR` is set or `TERM=dumb`, and symbols fall back to ASCII in a non-UTF-8 locale.
+  A `NEEDS YOU` block is pinned above the table only when a teammate is in one of the first
+  four states below; the STEP column is dropped below 60 columns.
+    waiting      AskUserQuestion notification detected — teammates must not use this;
+                 `show` its pane and SendMessage it to send NEEDS INPUT to the lead instead.
+                 Not detected for haiku/dontAsk tier.
+    model gone   Its model is no longer available — respawn with a different model
+    dead         Session exited — respawn it (a note says when its report is safe on disk)
+    stalled?     No status update for 10 minutes while mid-work. This is "no update in a
+                 while", not "stuck": a teammate in a long hook or subagent wait looks the
+                 same, so look at its pane before messaging it
+    working      Doing its work (a note says "report on disk" once it has reported)
+    idle         Turn ended with no report yet; routine while it waits on a peer or the lead,
+                 so it is not pinned under NEEDS YOU (it becomes stalled? after 10 minutes)
+    unknown      Not opened in cmux, or cmux could not be queried, so its state cannot be read
+    finished     Reported, verified and closed by the lead
+  State is read from the hooks cmux injects into each *live* teammate, not from its screen.
+  A finished teammate has no surface, so its state comes from its report on disk and the
+  registry.
+  The status pane opens automatically (unless `--no-monitor`) and repaints only when the
+  frame changes, checking every 30 s (override with `TEAM_STATUS_INTERVAL`). It exits when
+  the team is closed. Requires cmux. Under `--inline` there is no registry and no pane; track
+  teammates by their returned reports and tasks.md.
 - Say "shut down the team" to close all teammate panes/tabs (the run record stays;
   clean worktrees are removed, branches and PRs stay).
 
