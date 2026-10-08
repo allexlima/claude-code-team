@@ -466,6 +466,8 @@ sub_sync() {
     [ -z "$other_key" ] && cmux clear-progress --workspace "$ws" 2>/dev/null || true
     cmux log --source team --level info "team $team: closed" \
       --workspace "$ws" 2>/dev/null || true
+    # Remove state file so a reuse of this slug starts fresh
+    rm -f "$(dirname "$(_reg "$team")")/team-$team.sync" 2>/dev/null || true
     return 0
   fi
 
@@ -524,8 +526,8 @@ sub_sync() {
 
   # Transition logging: log when pill or per-teammate state changes.
   # State file: first line = last pill, subsequent lines = reported titles.
-  # /tmp lives next to the registry; volatile (lost on reboot) is fine.
-  local state_file="/tmp/team-$team.sync"
+  # Derived from _reg's directory so TEAM_REG_DIR overrides work in tests.
+  local state_file; state_file="$(dirname "$(_reg "$team")")/team-$team.sync"
   local prev_pill="" prev_reported_titles=""
   if [ -f "$state_file" ]; then
     prev_pill=$(head -1 "$state_file" 2>/dev/null || true)
