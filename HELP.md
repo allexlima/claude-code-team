@@ -9,7 +9,7 @@ and writes the final synthesis.
     /team <task> [options]
 
 ## Options
-    --roles N        Number of teammates, 2–5 (default 3)
+    --roles N        Number of teammates, 2–8 (default ~3)
     --rounds N       Challenge rounds after the first reports (default 1)
     --autoroles      Scan the project (README, layout, tests, git diff, stack) and propose
                      roles from it; waits for your OK before spawning
@@ -21,6 +21,9 @@ and writes the final synthesis.
     --no-caveman     Teammates write normal prose instead of caveman terse style
     --autoclose      Close the team right after the final synthesis
     --inline         No panes: teammates run as in-session subagents
+    --monitor        Open a small auto-refreshing status pane showing each teammate's
+                     milestone, current step, and flags (STALLED?/PROMPT/PARKED).
+                     Not counted toward the teammate cap; closed with the team.
     --help           Show this help
 
 ## Before spawning
@@ -45,12 +48,16 @@ The lead lists what this machine actually offers (`team.sh models` — the set i
 org-managed, so it is read at run time, not hardcoded) and gives each role the
 cheapest tier that still fits it: the top tier for the adversarial role and for
 architecture / security / subtle debugging, the middle tier for ordinary work,
-and the cheap tier only for mechanical sweeps. Cheap-tier teammates lose auto
-permission mode and will prompt in their pane, so they are not used for roles
-meant to run unattended. The roster you approve shows each role's model, so you
-can change any of them before spawning, and the run record notes what each role ran
-on. An unrecognised model is refused up front rather than opening a pane on a dead
-session. `--model` forces one model everywhere.
+and the cheap tier only for mechanical sweeps. `team.sh pick-model <tier>` returns
+the best model id for that tier on this machine (newest version within the `claude-*`
+family; GLM / Kimi only by explicit full id). Cheap-tier (haiku) teammates run
+unattended in `dontAsk` mode with a read-only tool allowlist on review runs — denied
+tools show up in their report. They are not used for build runs (editing + committing).
+Subagents launched by teammates default to Sonnet unless the teammate specifies
+otherwise. The roster you approve shows each role's model, so you can change any of
+them before spawning, and the run record notes what each role ran on. An unrecognised
+model is refused up front rather than opening a pane on a dead session. `--model`
+forces one model everywhere.
 
 ## Run types
     Review run   Read-only task, or not a git repo. Teammates share the working tree;
@@ -59,8 +66,9 @@ session. `--model` forces one model everywhere.
                  person: own worktree (.team/worktrees/<team>-<role>), own branch
                  (team/<team>-<role>), own commits, and its own no-mistakes gate —
                  review → test → docs → lint → push → PR. The lead asks your OK first
-                 because this publishes branches/PRs. You answer judgment calls in the
-                 teammate's pane. Summary lists every PR and flags overlapping files.
+                 because this publishes branches/PRs. Judgment calls are forwarded
+                 to the lead via NEEDS INPUT; you answer them in the lead pane.
+                 Summary lists every PR and flags overlapping files.
     Needs: no-mistakes (https://github.com/kunchenguid/no-mistakes) and an `origin`
     remote; without them the gate is skipped and commits stay local.
 
@@ -70,7 +78,7 @@ session. `--model` forces one model everywhere.
   so the grid shows only who is working. The session keeps running either way — nothing is
   killed, and you can watch any teammate again on request. (Panes + cmux only.)
 - Pane/tab title is fixed to <team>-<role> (Claude's auto-titling is disabled).
-- Starts in auto permission mode (TEAM_PERMISSION_MODE overrides; Haiku → manual).
+- Starts in auto permission mode (TEAM_PERMISSION_MODE overrides; haiku tier → dontAsk + read-only allowlist on review runs).
 - Splits its own work across subagents: anything independent (separate files, checks or
   drafts) is dispatched in one message so it runs concurrently, and its report says what
   it parallelised. It still verifies what the subagents hand back before reporting it.
@@ -83,14 +91,17 @@ a one-time pointer note is added to CLAUDE.local.md — never to CLAUDE.md):
     .team/facts.md             Consensus findings with evidence + date + run id;
                                every teammate reads it first and flags stale entries
     .team/roles/<role>.md      Roles saved in this project (override shared roles)
-    .team/runs/<date>-<team>/  tasks.md · prompts/ · reports/ · synthesis.md
+    .team/runs/<date>-<team>/  tasks.md · prompts/ · reports/ · status/ · synthesis.md
     .team/worktrees/           build-run worktrees (removed on shutdown if clean)
 Only conclusions and pointers are stored — never secrets, PII, or raw data.
 
-Shared role library: `~/.claude/team/roles/` (outside any repo; roles land there only
-when you agree to promote one — make it a private git repo to sync machines). On a new
-machine it starts empty until you sync it, so your saved roles are not lost, just not
-there yet.
+Shared role library: `~/.claude/team/roles/` (outside any repo; make it a private git
+repo to sync machines). `team.sh role-pull <name>` brings a shared role into this
+project; `team.sh role-promote <name>` publishes a project role to the shared library
+(shows a diff and scans for secrets/PII before copying). `team.sh roles` lists all
+available roles with a status column (in-sync / local-ahead / global-ahead / diverged)
+so you can see which project roles differ from the library. On a new machine the shared
+library starts empty until you sync it.
 
 ## Where teammates appear
     In cmux (default)   Your tab splits: you on the left, teammates in a two-column
@@ -112,12 +123,18 @@ there yet.
   teammate is a tab in your pane rather than a pane of its own — click its tab, or
   ask the lead to put it back on screen.
 - Teammate *tool-permission* prompts appear in *their* pane — approve them there.
-- A teammate that needs your input or a decision forwards the question to the lead; you
-  answer it in the lead pane (with options) and the lead relays it back — so you don't
-  have to visit each pane.
+  (Haiku-tier teammates run in dontAsk mode and don't prompt; denied tools appear in
+  their report.)
+- A teammate that needs your input or a decision forwards the question to the lead via
+  NEEDS INPUT; you answer it in the lead pane (with options) and the lead relays it
+  back — so you don't have to visit each pane.
 - Build-run worktrees are pre-trusted, so they no longer prompt. A folder you have
   never opened with Claude can still show a trust prompt the first time.
 - `.team/runs/<date>-<team>/tasks.md` tracks each role's status.
+- Run `team.sh status <team>` to see each teammate's milestone (spawned / investigating /
+  drafting / reported), current step, time since last activity, and flags (STALLED? /
+  PROMPT / PARKED / DEAD). With `--monitor`, this view opens automatically in a pane and
+  refreshes every 30 s (override with `TEAM_STATUS_INTERVAL`).
 - Say "shut down the team" to close all teammate panes/tabs (the run record stays;
   clean worktrees are removed, branches and PRs stay).
 
@@ -126,8 +143,10 @@ Consensus (findings that survived challenge, with evidence) · Disputed (each
 side's best evidence) · Dropped (refuted) · Next steps.
 
 ## Notes
-- Teammates start in auto permission mode (set TEAM_PERMISSION_MODE to
-  override). Haiku falls back to manual, so it will prompt more.
+- Teammates start in auto permission mode (set TEAM_PERMISSION_MODE to override).
+  Haiku-tier teammates run unattended in dontAsk mode with a read-only allowlist on
+  review runs; they are refused on build runs.
+- The hard cap is 8 teammates (spawn refuses beyond it).
 - Cost: every teammate is a full Claude session with its own context window,
   so cost scales with team size. Prefer 2–3 sharp roles; the lead already fits a model
   to each role, so reach for `--model` only to force one model everywhere.
