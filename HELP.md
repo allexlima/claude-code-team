@@ -56,9 +56,10 @@ the best model id for that tier on this machine (newest version within the `clau
 family; GLM / Kimi only by explicit full id). If no model of the requested tier is
 available it falls back through the chain (opus → sonnet → haiku) and exits 1, so the
 lead can see a lower tier was used; exit 3 means no model is available at any tier. Cheap-tier (haiku) teammates — and any model id that resolves to haiku tier (e.g. GLM /
-Kimi) — always run unattended in `dontAsk` mode with a per-teammate allowlist: Read/Glob/
-Grep, SendMessage, read-only git, ls/wc, `team.sh facts-lint`, and Edit on their own
-report, tasks.md, and status file. `TEAM_PERMISSION_MODE` never applies to haiku tier.
+Kimi) — always run unattended in `dontAsk` mode with a per-teammate allowlist:
+Read/Glob/Grep, SendMessage, ListAgents, Bash restricted to `git status`/`ls`/`wc`/
+`team.sh facts-lint`, and Edit on their own report, tasks.md, and status file.
+`TEAM_PERMISSION_MODE` never applies to haiku tier.
 Denied tools show up in their report. Haiku tier is refused on build runs. Subagents
 launched by teammates default to Sonnet when available, unless the teammate specifies
 otherwise. The roster you approve shows each role's model, so you can change any of
@@ -165,8 +166,9 @@ side's best evidence) · Dropped (refuted) · Next steps.
 ## Notes
 - Non-haiku teammates start in auto permission mode (set TEAM_PERMISSION_MODE to override).
   Haiku-tier teammates always run unattended in dontAsk mode with a per-teammate allowlist
-  (read-only, plus Edit on their own report, tasks.md and status file); TEAM_PERMISSION_MODE
-  has no effect on haiku tier; they are refused on build runs.
+  (Read/Glob/Grep, SendMessage/ListAgents, Bash: git status/ls/wc/facts-lint, Edit on own
+  report+tasks.md+status); TEAM_PERMISSION_MODE has no effect on haiku tier; they are
+  refused on build runs.
 - The hard cap is 8 teammates (spawn refuses beyond it).
 - Cost: every teammate is a full Claude session with its own context window,
   so cost scales with team size. Prefer 2–3 sharp roles; the lead already fits a model
