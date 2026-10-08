@@ -43,5 +43,6 @@ the slowest teammate sets the pace for the whole team.
   SendMessage-ing the lead, run:
   `cmux notify --title "<team>-<role>" --body "report ready"` (or
   `cmux notify --title "<team>-<role>" --body "NEEDS INPUT: <one-line summary>"` for
-  questions). This lights the ring and badge so the lead and user see it immediately.
-  Skip silently if cmux is not available (--inline mode).
+  questions). This lights the badge so the lead and user see it. Your pane may close once the
+  lead has verified your report, so do not rely on the ring surviving. Skip silently if cmux
+  is not available (--inline mode).
