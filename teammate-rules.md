@@ -39,6 +39,9 @@ the slowest teammate sets the pace for the whole team.
   to the user without reordering. Wait for the lead's reply with the decision, then
   continue. (This is for *questions you choose to ask*; the CLI's own tool-permission
   prompts are handled in your pane and are not forwarded.)
+- **Leave your worktree clean before reporting.** On a build run the lead's `finish` refuses while
+  your worktree has uncommitted changes, and untracked files count. Commit your work and commit
+  or delete scratch files first, or your own pane cannot be closed.
 - **Notify when reporting or sending NEEDS INPUT.** Order for a report: write the report file,
   tick your line in `tasks.md`, run `cmux notify`, and make the SendMessage to the lead your
   **last** act — the lead finishes (closes) your pane on receiving it, so anything after it may

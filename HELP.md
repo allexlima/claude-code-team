@@ -203,10 +203,13 @@ team. Requires cmux; skipped under --inline.
                  Not detected for haiku/dontAsk tier.
     model gone   Its model is no longer available — respawn with a different model
     dead         Session exited — respawn it (a note says when its report is safe on disk)
-    stalled?     Mid-work with no status or report write for 10 minutes — check its pane
+    stalled?     No status update for 10 minutes while mid-work. This is "no update in a
+                 while", not "stuck": a teammate in a long hook or subagent wait looks the
+                 same, so look at its pane before messaging it
     working      Doing its work (a note says "report on disk" once it has reported)
-    idle         Turn ended with no report yet; routine while it waits on a peer
-    unknown      Not opened in cmux, so its state cannot be read
+    idle         Turn ended with no report yet; routine while it waits on a peer or the lead,
+                 so it is not pinned under NEEDS YOU (it becomes stalled? after 10 minutes)
+    unknown      Not opened in cmux, or cmux could not be queried, so its state cannot be read
     finished     Reported, verified and closed by the lead
   State is read from the hooks cmux injects into each *live* teammate, not from its screen.
   A finished teammate has no surface, so its state comes from its report on disk and the
