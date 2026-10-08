@@ -265,6 +265,36 @@ done
 [ -z "$bad" ] && pass "E8: header keeps a real HH:MM:SS clock and never a stray '@' at 24-55 cols, with a long team name (decision 65)" \
   || fail "E8: clock at narrow width" "$bad"
 
+
+# ═══ C1-C5 — workstream C: sidebar pill + severity-coded log, via `team.sh sync` (decisions 13, 14, 21, 22) ═══
+sync_run() { (cd "$G" && env "${@:2}" bash "$TEAM_SH" sync "$1" 2>&1) >/dev/null || true; }
+RUNC="$G/.team/runs/2026-10-08-c1"; mkdir -p "$RUNC/reports" "$RUNC/status"
+{ printf 'cmux surface:130 pane c1-a - - %s %s live 1111 %s\n' "$RUNC" "$G" "$G"
+  printf 'cmux surface:131 pane c1-b - - %s %s live 2222 %s\n' "$RUNC" "$G" "$G"; } > "$TEAM_REG_DIR/team-c1.tabs"
+: > "$CMUX_LOG"; sync_run c1
+pill=$(grep -E '^set-status ' "$CMUX_LOG" | head -1)
+pcol=$(sed -n 's/.*--color \(#[0-9A-Fa-f]\{6\}\).*/\1/p' <<<"$pill")
+pprio=$(sed -n 's/.*--priority \([0-9][0-9]*\).*/\1/p' <<<"$pill")
+if [ -n "$pcol" ] && [ "$(tr a-f A-F <<<"$pcol")" != "#4C8DFF" ] && [ "${pprio:-0}" -ge 1 ] && grep -q -- '--icon' <<<"$pill"; then
+  pass "C1: the team pill passes --icon, a non-accent --color (not #4C8DFF) and --priority >= 1 so it outranks the shim's default-0 pill (decisions 13, 21)"
+else fail "C1: pill differentiation" "pill=[$pill]"; fi
+badlog=$(grep -E '^log ' "$CMUX_LOG" | grep -vE -- '--level (info|progress|success|warning|error)( |$)' || true)
+{ grep -qE '^log ' "$CMUX_LOG" && [ -z "$badlog" ]; } \
+  && pass "C2: every cmux log call carries an explicit --level (decision 22)" \
+  || fail "C2: log levels" "unleveled: $badlog"
+: > "$CMUX_LOG"; printf 'x\nPARALLELISM: none\n' > "$RUNC/reports/b.md"; sync_run c1
+grep -qE -- '^log .*--level success .*c1-b: reported' "$CMUX_LOG" \
+  && pass "C3: a report arriving logs '<title>: reported' at --level success (decision 14)" \
+  || fail "C3: report -> success" "$(grep -E '^log ' "$CMUX_LOG")"
+: > "$CMUX_LOG"; sync_run c1 CMUX_NOTFOUND_REFS="surface:130"
+grep -qE -- '^log .*--level error .*c1-a: dead' "$CMUX_LOG" \
+  && pass "C4: a definitely-gone teammate logs '<title>: dead' at --level error (decision 14)" \
+  || fail "C4: dead -> error" "$(grep -E '^log ' "$CMUX_LOG")"
+: > "$CMUX_LOG"; (cd "$G" && bash "$TEAM_SH" sync --clear c1) >/dev/null 2>&1 || true
+{ grep -q '^clear-progress' "$CMUX_LOG" && grep -qE -- '^log .*--level info .*closed' "$CMUX_LOG"; } \
+  && pass "C5: sync --clear clears the progress bar and logs 'closed' at --level info (decision 14)" \
+  || fail "C5: clear" "$(cat "$CMUX_LOG")"
+
 echo; echo "status-render: $passes passed, $fails failed"
 [ "$fails" = 0 ] || exit 1
 echo "all passed ($passes cases)"
