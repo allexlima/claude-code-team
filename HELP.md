@@ -167,8 +167,9 @@ team. Requires cmux; skipped under --inline.
   (spawned → investigating → drafting → reported),
   current step, time since last activity, and flags:
     STALLED?     No update in a while — check its pane or message it
-    WAITING      Unread cmux notification (hook-detected): teammate is waiting for input;
+    WAITING      AskUserQuestion notification detected: teammate is waiting for input;
                  message it through the lead. Not shown for haiku/dontAsk tier or parked.
+                 A permission prompt is NOT flagged here (check the cmux tab badge instead).
     MODEL_GONE   Its model is no longer available — respawn with a different model
     DEAD         Session exited — respawn it
     PARKED       Folded into a tab; session is still running
@@ -196,4 +197,5 @@ side's best evidence) · Dropped (refuted) · Next steps.
 - Give roles separate files when the task edits code.
 - This emulates Claude Code's experimental agent teams for setups where they're
   unavailable (e.g. disabled by managed settings); the lead relays challenge
-  rounds instead of a native shared mailbox.
+  rounds instead of a native shared mailbox. Native `cmux claude-teams` is blocked
+  by managed settings on this gateway — this skill remains the supported path.

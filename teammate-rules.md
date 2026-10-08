@@ -20,8 +20,9 @@ the slowest teammate sets the pace for the whole team.
 - **Report what you parallelised** on the PARALLELISM line of your report, so the lead
   can see it happened.
 - **Cap at 4 concurrent subagents per dispatch.** Dispatch at most 4 agents in a single
-  message. A 5th concurrent Agent call is rejected at launch and silently never runs — so
-  dispatch in batches of 4, wait for all 4 to return, then dispatch the next batch.
+  message. `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=4` is set in the spawn environment and
+  the CLI enforces it — dispatching more than 4 at once may lose calls silently. Dispatch
+  in batches of 4, wait for all 4 to return, then dispatch the next batch.
   Verify that every subagent you dispatched actually returned a notification before
   treating its work as done. Each subagent call should pass a `model` (sonnet by
   default; use a cheaper model only for purely mechanical sweeps such as grep, cat, or count).
