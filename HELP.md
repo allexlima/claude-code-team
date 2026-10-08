@@ -21,10 +21,11 @@ and writes the final synthesis.
     --no-caveman     Teammates write normal prose instead of caveman terse style
     --autoclose      Close the team right after the final synthesis
     --inline         No panes: teammates run as in-session subagents
-    --monitor        Open an auto-refreshing status tab showing each teammate's
-                     milestone, current step, and flags (STALLED?/MODEL_GONE/DEAD/PARKED/PROMPT).
-                     Not counted toward the teammate cap; closed with the team.
-                     Ignored under --inline (no tab/pane to open; use team.sh status).
+    --monitor        Open an auto-refreshing status pane (or a new tab when no active cmux
+                     surface) showing each teammate's milestone, current step, and flags
+                     (STALLED?/MODEL_GONE/DEAD/PARKED/PROMPT). Not counted toward the teammate
+                     cap; closed with the team. Without a cmux/tmux backend, prints the watch
+                     command instead. Ignored under --inline (no registry to read).
     --help           Show this help
 
 ## Before spawning
@@ -51,11 +52,13 @@ cheapest tier that still fits it: the top tier for the adversarial role and for
 architecture / security / subtle debugging, the middle tier for ordinary work,
 and the cheap tier only for mechanical sweeps. `team.sh pick-model <tier>` returns
 the best model id for that tier on this machine (newest version within the `claude-*`
-family; GLM / Kimi only by explicit full id). Cheap-tier (haiku) teammates run
-unattended in `dontAsk` mode with a read-only tool allowlist on review runs — denied
-tools show up in their report. They are not used for build runs (editing + committing).
-Subagents launched by teammates default to Sonnet when available, unless the teammate
-specifies otherwise. The roster you approve shows each role's model, so you can change any of
+family; GLM / Kimi only by explicit full id). Cheap-tier (haiku) teammates — and any model id that resolves to haiku tier (e.g. GLM /
+Kimi) — always run unattended in `dontAsk` mode with a per-teammate allowlist: Read/Glob/
+Grep, SendMessage, read-only git, ls/wc, `team.sh facts-lint`, and Edit on their own
+report, tasks.md, and status file. `TEAM_PERMISSION_MODE` never applies to haiku tier.
+Denied tools show up in their report. Haiku tier is refused on build runs. Subagents
+launched by teammates default to Sonnet when available, unless the teammate specifies
+otherwise. The roster you approve shows each role's model, so you can change any of
 them before spawning, and the run record notes what each role ran on. An unrecognised
 model is refused up front rather than opening a pane on a dead session. `--model`
 forces one model everywhere.
@@ -79,7 +82,7 @@ forces one model everywhere.
   so the grid shows only who is working. The session keeps running either way — nothing is
   killed, and you can watch any teammate again on request. (Panes + cmux only.)
 - Pane/tab title is fixed to <team>-<role> (Claude's auto-titling is disabled).
-- Starts in auto permission mode (TEAM_PERMISSION_MODE overrides; haiku tier → dontAsk + read-only allowlist on review runs).
+- Starts in auto permission mode (TEAM_PERMISSION_MODE overrides for non-haiku tiers; haiku tier always → dontAsk + per-teammate allowlist, regardless of TEAM_PERMISSION_MODE).
 - Splits its own work across subagents: anything independent (separate files, checks or
   drafts) is dispatched in one message so it runs concurrently, and its report says what
   it parallelised. It still verifies what the subagents hand back before reporting it.
@@ -139,15 +142,16 @@ On a new machine the shared library starts empty until you sync it.
   never opened with Claude can still show a trust prompt the first time.
 - `.team/runs/<date>-<team>/tasks.md` tracks each role's status.
 - Run `team.sh status <team>` to see each teammate's milestone
-  (spawned → investigating → drafting → reported → challenged),
+  (spawned → investigating → drafting → reported),
   current step, time since last activity, and flags:
     STALLED?     No update in a while — check its pane or message it
     MODEL_GONE   Its model is no longer available — respawn with a different model
     DEAD         Session exited — respawn it
     PARKED       Folded into a tab; session is still running
     PROMPT       Waiting for tool approval in its pane (never shown for haiku/GLM/Kimi or parked)
-  With `--monitor`, this view opens automatically in a status tab and refreshes every 30 s
-  (override with `TEAM_STATUS_INTERVAL`).
+  With `--monitor`, this view opens automatically in a status pane (or new tab when no
+  active cmux surface) and refreshes every 30 s (override with `TEAM_STATUS_INTERVAL`).
+  Under `--inline` there is no registry; track teammates by their returned reports and tasks.md.
 - Say "shut down the team" to close all teammate panes/tabs (the run record stays;
   clean worktrees are removed, branches and PRs stay).
 
