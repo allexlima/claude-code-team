@@ -56,7 +56,7 @@
 # --tabs (cmux): one tab per teammate instead. --tmux forces tmux.
 # Permission mode: a haiku-tier model (by resolved tier, so any id that behaves as haiku) always
 # gets --permission-mode dontAsk plus a per-teammate allowlist: Read/Glob/Grep, SendMessage,
-# read-only git (status/log/diff/show/ls-files/rev-parse/blame), ls/wc, `team.sh facts-lint`, and Edit on exactly its
+# `git status` (diff/log/show can write via --output), ls/wc, `team.sh facts-lint`, and Edit on exactly its
 # <run>/reports/<role>.md, <run>/tasks.md and <run>/status/<role>.txt (<run> = parent of the
 # prompt file's prompts/ dir, which a haiku-tier prompt must live in). Haiku tier is refused with
 # --worktree. Every other tier uses TEAM_PERMISSION_MODE (default auto); it never applies to haiku tier.
@@ -534,7 +534,7 @@ pdir=$(dirname "$pfile")
 # TEAM_PERMISSION_MODE says. The allowlist is read-only except Edit on this teammate's own
 # report, tasks.md and status file: `Write(//abs)` is denied under dontAsk, `Edit(//abs)` is
 # not. `//` + abs path, unresolved, because the rule matches the path as the teammate writes it.
-# No Bash(git:*) (commit/push) or python3. Haiku tier cannot commit, so no build runs.
+# No other git (commit/push, or --output writes) and no python3. Haiku tier cannot commit, so no build runs.
 allow=
 if [ "$tier" = haiku ]; then
   [ -z "$worktree" ] || { echo "haiku-tier model ($model) cannot run with --worktree: its allowlist cannot commit; use a sonnet-tier model" >&2; exit 2; }
@@ -544,7 +544,8 @@ if [ "$tier" = haiku ]; then
   allow+=",Bash(ls:*),Bash(wc:*)"
   # Every spawn prompt asks for facts-lint; a rule matches the command text as typed, so both forms.
   allow+=",Bash(bash ~/.claude/skills/team/team.sh facts-lint:*),Bash(bash $here/team.sh facts-lint:*)"
-  for g in status log diff show ls-files rev-parse blame; do allow+=",Bash(git $g:*)"; done
+  # Only `git status`: diff/log/show take --output=<file> (writes, live-probed); read code with Read/Grep/Glob.
+  allow+=",Bash(git status:*)"
   pmode=dontAsk
   echo "note: $title is haiku-tier ($model): --permission-mode dontAsk + read-only allowlist" >&2
 else
