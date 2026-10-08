@@ -79,7 +79,7 @@ When you're done, say **"shut down the team"**.
 ## Good to know
 
 - **Cost scales with team size** — every teammate is a full Claude session. 2–3 sharp roles beat 5 vague ones.
-- **Tool-permission prompts appear in each teammate's own pane** — teammate *questions*, by contrast, are forwarded to the lead, who relays them to you in one place. Haiku-tier models (including behaves-as-haiku ones like GLM/Kimi) run unattended in dontAsk mode with a per-teammate allowlist (Read/Glob/Grep, SendMessage/ListAgents, Bash: git status/ls/wc/facts-lint, Edit on own report+tasks.md+status) on review runs; denied tools show up in their report.
+- **Tool-permission prompts appear in each teammate's own pane** — teammate *questions*, by contrast, are forwarded to the lead, who relays them to you in one place. Haiku-tier models (including behaves-as-haiku ones like GLM/Kimi) run unattended in dontAsk mode with a per-teammate allowlist (Read/Glob/Grep, SendMessage/ListAgents, Bash: git status/ls/wc/facts-lint/`cmux notify --title ...`, Edit on own report+tasks.md+status) on review runs; denied tools show up in their report.
 - **First time in a folder**, each pane shows Claude's workspace-trust prompt (folders inside a trusted project are already trusted).
 - **Build runs publish** (push + PR per teammate); the lead always asks before spawning them.
 - Tested on macOS with cmux.
