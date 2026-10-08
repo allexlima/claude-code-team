@@ -36,6 +36,16 @@
 _ST_UUID_MAP=
 _ST_NOTIF_DATA=
 
+# Shared palette (decision 16): the sidebar pill and the monitor pane use the same
+# four roles. None is "#4C8DFF" — `cmux set-status --help` documents that hex as the
+# cmux accent, which the claude shim's own claude_code pill already uses.
+_ST_C_ALERT='#FF453A'   # needs you / dead
+_ST_C_ACTIVE='#AF52DE'  # working
+_ST_C_DONE='#30D158'    # reported / finished
+_ST_C_DIM='#8E8E93'     # unknown / neutral
+# Sidebar sort priority; higher appears first. The shim's claude_code pill is 0.
+_ST_PILL_PRIORITY=50
+
 # ---------------------------------------------------------------------------
 # Fallback helpers — activate only when team.sh hasn't defined them
 # ---------------------------------------------------------------------------
@@ -521,12 +531,14 @@ sub_sync() {
     frac=$(python3 -c "print(f'{$reported/$total:.2f}')" 2>/dev/null) || frac="0.0"
   fi
 
-  # Compute pill text
+  # Compute pill text; colour and log level follow the phase
   local pill="$phase · $reported/$total reported"
+  local pill_color=$_ST_C_ACTIVE level=progress
+  [ "$phase" = done ] && { pill_color=$_ST_C_DONE; level=success; }
 
   # Update sidebar (never fatal; use per-team key and explicit workspace)
-  cmux set-status "$key" "$pill" \
-    --icon sparkle --color "#4C8DFF" --workspace "$ws" 2>/dev/null || true
+  cmux set-status "$key" "$pill" --icon sparkle --color "$pill_color" \
+    --priority "$_ST_PILL_PRIORITY" --workspace "$ws" 2>/dev/null || true
   cmux set-progress "$frac" --label "$team" --workspace "$ws" 2>/dev/null || true
 
   # Transition logging: log when pill or per-teammate state changes.
@@ -541,7 +553,7 @@ sub_sync() {
 
   # Log overall phase/count change
   if [ "$pill" != "$prev_pill" ]; then
-    cmux log --source team "$team: $pill" --workspace "$ws" 2>/dev/null || true
+    cmux log --source team --level "$level" "$team: $pill" --workspace "$ws" 2>/dev/null || true
   fi
 
   # Build current reported titles list; log each new completion
@@ -559,7 +571,7 @@ sub_sync() {
     if [ -n "$_run" ] && [ -f "$_run/reports/$_role.md" ]; then
       cur_reported_titles="${cur_reported_titles}${_title}"$'\n'
       if ! printf '%s\n' "$prev_reported_titles" | grep -qxF "$_title" 2>/dev/null; then
-        cmux log --source team "$_title: reported" --workspace "$ws" 2>/dev/null || true
+        cmux log --source team --level success "$_title: reported" --workspace "$ws" 2>/dev/null || true
       fi
     fi
   done < "$reg"
