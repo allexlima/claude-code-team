@@ -4,24 +4,46 @@
 # no real pane is ever opened or closed. Prints PASS/FAIL per case; exit 1 on any FAIL.
 #   bash tests/team-cli.sh
 set -euo pipefail
-TEAM_SH="$(cd "$(dirname "$0")/.." && pwd)/team.sh"
+TEAM_SH="${TEAM_SH:-$(cd "$(dirname "$0")/.." && pwd)/team.sh}"
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 fails=0
 pass() { echo "PASS  $1"; }
 fail() { echo "FAIL  $1${2:+ — $2}"; fails=$((fails+1)); }
 
-# Stub cmux: logs every call; like the real one, refuses to close a surface whose
-# process is alive (all of ours are) unless --force is given.
+# Stub cmux: handles ping, --version, tree (configurable via CMUX_TREE_SURFACES file),
+# and close-surface. Use CMUX_CLOSE_FAIL=1 to make closes fail; never replace the stub.
 mkdir -p "$W/bin"
-cat > "$W/bin/cmux" <<SH
+CMUX_LOG="$W/cmux.log"
+CMUX_TREE_FILE="$W/tree_surfaces.tsv"  # tab-sep "ref<TAB>title" per line
+# Make CMUX_TREE_FILE available to the stub via env (written by tests before each close call)
+export CMUX_LOG CMUX_TREE_FILE
+cat > "$W/bin/cmux" <<'SH'
 #!/usr/bin/env bash
-printf '%s\n' "\$*" >> "$W/cmux.log"
-case "\$1" in
-  close-surface) case " \$* " in *" --force "*) echo "OK \$3" ;; *) echo "Error: confirmation_required: Surface has a running process; retry with force=true" >&2; exit 1 ;; esac ;;
+printf '%s\n' "$*" >> "$CMUX_LOG"
+case "$1" in
+  ping) echo PONG ;;
+  --version) echo "cmux 0.65.0 (108) stub" ;;
+  close-surface)
+    [ "${CMUX_CLOSE_FAIL:-}" = 1 ] && { echo "Error: boom" >&2; exit 1; }
+    case " $* " in *" --force "*) echo "OK" ;; *) echo "Error: confirmation_required: Surface has a running process; retry with force=true" >&2; exit 1 ;; esac ;;
+  tree)
+    jout='{"workspaces":[{"ref":"workspace:1","surfaces":['
+    first=1
+    [ -f "${CMUX_TREE_FILE:-}" ] && while IFS=$(printf '\t') read -r ref title; do
+      [ -n "$ref" ] || continue
+      [ "$first" = 1 ] || jout+=","
+      jout+="{\"ref\":\"$ref\",\"title\":\"$title\"}"
+      first=0
+    done < "$CMUX_TREE_FILE"
+    jout+=']}]}'
+    echo "$jout" ;;
 esac
 SH
 chmod +x "$W/bin/cmux"
 export PATH="$W/bin:$PATH"
+# Redirect registries to scratch dir (never touch /tmp/team-*.tabs of live projects)
+export TEAM_REG_DIR="$W/reg"
+mkdir -p "$W/reg"
 
 # 1. Unknown subcommands never reach the spawn path (which opens a real pane).
 for args in "bogus" "bogus a b c" "spwan t r p.md sonnet" "--worktree t r p.md"; do
@@ -46,22 +68,26 @@ n=$(printf '%s\n' "$out" | grep -c $'^NOANCHOR\t' || true)
 [ $rc = 0 ] && [ "$n" = 3 ] && pass "facts-lint: no-file:line facts don't abort" || fail "facts-lint: no-file:line facts don't abort" "rc=$rc out=$out"
 
 # 3. close really closes live panes, and says so only when it did.
-printf 'cmux surface:1 pane t-a m\ncmux surface:2 pane t-b m\n' > /tmp/team-tcli$$.tabs
-: > "$W/cmux.log"
-out=$(bash "$TEAM_SH" close "tcli$$" 2>&1) && rc=0 || rc=$?
-forced=$(grep -c -- '--force' "$W/cmux.log" || true)
-[ $rc = 0 ] && [ "$forced" = 2 ] && [ ! -e /tmp/team-tcli$$.tabs ] && pass "close: force-closes live panes" || fail "close: force-closes live panes" "rc=$rc forced=$forced out=$out"
+# TEAM_REG_DIR redirects to $W/reg; CMUX_TREE_FILE makes surfaces appear live.
+TCLI="tcli$$"
+printf 'cmux surface:1 pane t-a m\ncmux surface:2 pane t-b m\n' > "$TEAM_REG_DIR/team-$TCLI.tabs"
+printf 'surface:1\tt-a\nsurface:2\tt-b\n' > "$CMUX_TREE_FILE"
+: > "$CMUX_LOG"
+out=$(bash "$TEAM_SH" close "$TCLI" 2>&1) && rc=0 || rc=$?
+forced=$(grep -c -- '--force' "$CMUX_LOG" || true)
+[ $rc = 0 ] && [ "$forced" = 2 ] && [ ! -e "$TEAM_REG_DIR/team-$TCLI.tabs" ] \
+  && pass "close: force-closes live panes" \
+  || fail "close: force-closes live panes" "rc=$rc forced=$forced out=$out"
 # A surface that cannot be closed is reported, and its row is kept for a retry.
-cat > "$W/bin/cmux" <<SH
-#!/usr/bin/env bash
-printf '%s\n' "\$*" >> "$W/cmux.log"
-[ "\$1" = close-surface ] && { echo "Error: boom" >&2; exit 1; }
-SH
-printf 'cmux surface:9 pane t-z m\n' > /tmp/team-tcli$$.tabs
-out=$(bash "$TEAM_SH" close "tcli$$" 2>&1) && rc=0 || rc=$?
-[ $rc != 0 ] && [[ $out == *"could not close"* ]] && [[ $out != *"closed cmux surface:9"* ]] && grep -q 'surface:9' /tmp/team-tcli$$.tabs \
-  && pass "close: failure reported, row kept" || fail "close: failure reported, row kept" "rc=$rc out=$out"
-rm -f /tmp/team-tcli$$.tabs
+printf 'cmux surface:9 pane t-z m\n' > "$TEAM_REG_DIR/team-$TCLI.tabs"
+printf 'surface:9\tt-z\n' > "$CMUX_TREE_FILE"
+: > "$CMUX_LOG"
+out=$(CMUX_CLOSE_FAIL=1 bash "$TEAM_SH" close "$TCLI" 2>&1) && rc=0 || rc=$?
+[ $rc != 0 ] && [[ $out == *"could not close"* ]] && [[ $out != *"closed cmux surface:9"* ]] \
+  && grep -q 'surface:9' "$TEAM_REG_DIR/team-$TCLI.tabs" \
+  && pass "close: failure reported, row kept" \
+  || fail "close: failure reported, row kept" "rc=$rc out=$out"
+rm -f "$TEAM_REG_DIR/team-$TCLI.tabs" "$CMUX_TREE_FILE"
 
 # 4. facts-lint --pre-append refuses secrets/PII and lets git remotes through. Every
 # token is assembled at run time so this file never holds a literal secret.

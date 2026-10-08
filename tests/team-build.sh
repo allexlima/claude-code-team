@@ -673,19 +673,20 @@ JSON
 # ══════════════════════════════════════════════════════════════════
 
 # rev4-1a: spawn without cmux on PATH → exit 3
-# Run spawn in a clean env where PATH has python3+git+bash but no cmux at all.
+# Place a stub that exits 127 first in PATH so command -v cmux fails.
 {
   R="$W/rv1a"; _mkgit "$R"
   pf="$R/p.md"; printf 'prompt\n' > "$pf"
   TM="rv1a$$"
   _reset_logs
-  # Build a minimal PATH: directories that have python3/git/bash/awk but not cmux
-  min_path=$(for t in python3 git bash awk sed tr wc; do
-    p=$(command -v "$t" 2>/dev/null || true); [ -n "$p" ] && dirname "$p"; done \
-    | sort -u | grep -v cmux | tr '\n' ':' | sed 's/:$//')
-  out=$(cd "$R" && TEAM_REG_DIR="$W/regs" TEAM_MODELS_FILE="$W/home/.claude/settings.json" \
-    HOME="$W/home" CMUX_WORKSPACE_ID=ws-test CMUX_SURFACE_ID=surface:lead \
-    PATH="$min_path" bash "$TEAM_SH" spawn "$TM" worker "$pf" sonnet 2>&1) && rc=0 || rc=$?
+  mkdir -p "$W/nobin"
+  cat > "$W/nobin/cmux" <<'BADSH'
+#!/usr/bin/env bash
+exit 127
+BADSH
+  chmod -x "$W/nobin/cmux"  # non-executable → command -v fails
+  out=$(cd "$R" && PATH="$W/nobin:$(echo "$PATH" | tr ':' '\n' | grep -v '/Applications/cmux' | grep -v 'cmux\.app' | tr '\n' ':' | sed 's/:$//')" \
+    bash "$TEAM_SH" spawn "$TM" worker "$pf" sonnet 2>&1) && rc=0 || rc=$?
   [ "$rc" = 3 ] && [[ "$out" == *"cmux"* ]] \
     && pass "rev4-1a: spawn without cmux exits 3 with install hint" \
     || fail "rev4-1a: spawn without cmux exits 3 with install hint" "rc=$rc out=${out:0:120}"
