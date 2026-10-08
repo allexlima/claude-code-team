@@ -7,8 +7,8 @@
 #   $here              absolute dir of team.sh
 #   _root              prints main checkout root (main worktree)
 #   _reg <team>        prints /tmp/team-<team>.tabs
-#   _reg_add <team> <ref> <layout> <title> <model|-> <submodel|-> <rundir|->
-#                      appends a registry row (root col appended automatically)
+#   _reg_add <team> <ref> <layout> <title> <model|-> <submodel|-> <rundir|-> [<sid> <cwd>]
+#                      appends a registry row (root + state=live inserted automatically)
 #   _pane_of <ref>     prints cmux pane_ref or "gone" (cmux only)
 #   _lead_pane         prints "<pane_ref> <surface_ref>" of caller's session
 #   _model_tier <m>    prints opus|sonnet|haiku or empty
@@ -17,12 +17,15 @@
 #   _require_cmux [ws] exits 3 if cmux absent/unhealthy; ws also checks CMUX_*IDs
 #   _lock <file>       acquire lock; EXIT trap set for cleanup
 #
-# Registry row format (team.sh, 8 cols):
-#   backend ref layout title model submodel rundir root
+# Registry row format (team.sh, 11 cols):
+#   backend ref layout title model submodel rundir root state session-id cwd
 #   col 3 layout ∈ pane|tab|dash  (dash = monitor row, excluded from status table)
 #   col 6 CLAUDE_CODE_SUBAGENT_MODEL id or "-" (absent on old rows → "")
 #   col 7 absolute run dir or "-" (absent on old rows → "")
 #   col 8 project root or "-" (absent on old rows → "")
+#   col 9 live|finished (absent on rows before rev5 → live). `finished` = closed on
+#         purpose by `team.sh finish`; its surface is gone by design, so it is never DEAD
+#   col 10 session id or "-"; col 11 cwd (last, may contain spaces)
 #
 # Module-level state (reset by each _st_table call):
 #   _ST_UUID_MAP   "surface:N=UUID\n…" built from cmux list-panes (one python3 call)
@@ -92,21 +95,52 @@ fi
 if ! declare -f _reg_add >/dev/null 2>&1; then
   _reg_add() {
     local team="$1" ref="$2" lay="$3" title="$4" mdl="${5:--}" smdl="${6:--}" rdir="${7:--}"
+    local sid="${8:--}" cwd="${9:-}"
     local root; root=$(_root 2>/dev/null || pwd)
-    printf 'cmux %s %s %s %s %s %s %s\n' \
-      "$ref" "$lay" "$title" "$mdl" "$smdl" "$rdir" "$root" \
+    printf 'cmux %s %s %s %s %s %s %s live %s %s\n' \
+      "$ref" "$lay" "$title" "$mdl" "$smdl" "$rdir" "$root" "$sid" "$cwd" \
       >> "$(_reg "$team")"
   }
 fi
 
 # ---------------------------------------------------------------------------
+# _st_state <finished> <backend> <alive> <model_gone> <waiting> <idle> <stalled>
+# Pure: prints exactly one state token from the detection facts _st_row gathers.
+# Flags are 1 or empty; <alive> is 1 (surface exists), 0 (gone) or empty (unknown,
+# e.g. no cmux on PATH). Decision order, first match wins:
+#   FINISHED    col 9 is rev5-core's `finished` marker — the only "finished on
+#               purpose" signal (surface-health omits closed surfaces, and a report on
+#               disk alone is also true mid-flight and in round 2)
+#   UNKNOWN     not a cmux row, or liveness unknown: never rendered as alive
+#   DEAD        surface gone without the marker
+#   MODEL_GONE  model (or subagent model) no longer offered
+#   WAITING     newest notification is an AskUserQuestion ("Claude question")
+#   IDLE        newest notification is "Completed in …" and no report on disk
+#   STALLED     mid-work milestone, no status/report write for >=10 min
+#   WORKING     everything else (including "report on disk" while still alive)
+# ---------------------------------------------------------------------------
+_st_state() {
+  local fin=$1 backend=$2 alive=$3 gone=$4 waiting=$5 idle=$6 stalled=$7
+  if [ -n "$fin" ]; then echo FINISHED
+  elif [ "$backend" != cmux ] || [ -z "$alive" ]; then echo UNKNOWN
+  elif [ "$alive" != 1 ]; then echo DEAD
+  elif [ -n "$gone" ]; then echo MODEL_GONE
+  elif [ -n "$waiting" ]; then echo WAITING
+  elif [ -n "$idle" ]; then echo IDLE
+  elif [ -n "$stalled" ]; then echo STALLED
+  else echo WORKING
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # _st_row <row> <run> <leadpane> <team>: render one registry row as a table line
-# Reads module globals: _ST_UUID_MAP, _ST_NOTIF_DATA
+# Detection only: gathers the facts, asks _st_state for the token, maps it back to
+# the FLAGS vocabulary. Reads module globals: _ST_UUID_MAP, _ST_NOTIF_DATA
 # ---------------------------------------------------------------------------
 _st_row() {
   local row="$1" run="$2" leadpane="$3" team="$4"
 
-  local backend ref lay title mdl submdl rundir
+  local backend ref lay title mdl submdl rundir marker
   backend=$(awk '{print $1}' <<<"$row")
   ref=$(awk '{print $2}' <<<"$row")
   lay=$(awk '{print $3}' <<<"$row")
@@ -114,6 +148,7 @@ _st_row() {
   mdl=$(awk '{print $5}' <<<"$row")
   submdl=$(awk 'NF>=6{print $6}' <<<"$row")
   rundir=$(awk 'NF>=7{print $7}' <<<"$row")
+  marker=$(awk 'NF>=9{print $9}' <<<"$row")
 
   # Strip exact team prefix to handle team slugs with hyphens
   local role="${title#"$team"-}"
@@ -167,44 +202,43 @@ _st_row() {
     la="${age}m ago"
   fi
 
-  # ------ FLAGS -----------------------------------------------------------
-  local flags=''
+  # ------ FACTS -----------------------------------------------------------
+  local fin= alive= gone= waiting= idle= stalled= parked=
+  [ "$marker" = finished ] && fin=1
 
-  # STALLED?: derived signals only; fires during mid-work milestones, silent >10m
+  # STALLED: derived signals only; fires during mid-work milestones, silent >10m
   case $ms in
     spawned|investigating|drafting)
-      [ "$newest" -gt 0 ] && [ "$age" -ge 10 ] && flags="${flags}STALLED? " ;;
+      [ "$newest" -gt 0 ] && [ "$age" -ge 10 ] && stalled=1 ;;
   esac
 
   # MODEL_GONE (N3): check main model col and subagent model col
   local m
   for m in "$mdl" "$submdl"; do
     [ -z "$m" ] || [ "$m" = "-" ] && continue
-    _model_gone "$m" 2>/dev/null && { flags="${flags}MODEL_GONE "; break; }
+    _model_gone "$m" 2>/dev/null && { gone=1; break; }
   done
 
-  # DEAD / PARKED / WAITING (cmux only)
-  if [ "$backend" = cmux ] && command -v cmux >/dev/null; then
-    if ! _alive cmux "$ref" 2>/dev/null; then
-      flags="${flags}DEAD "
-    else
+  # Liveness / parked-in-lead-pane / WAITING / IDLE (cmux only; skipped once finished)
+  if [ -z "$fin" ] && [ "$backend" = cmux ] && command -v cmux >/dev/null; then
+    alive=0
+    if _alive cmux "$ref" 2>/dev/null; then
       local pp; pp=$(_pane_of "$ref" 2>/dev/null || echo gone)
-      if [ "$pp" = gone ]; then
-        flags="${flags}DEAD "
-      else
-        # PARKED: pane_ref matches lead (only when lead context available)
+      if [ "$pp" != gone ]; then
+        alive=1
+        # In the lead's pane (show's failure path, a hand-dragged tab): a note, not a state
         if [ -n "$leadpane" ] && [ "$pp" = "$leadpane" ]; then
-          flags="${flags}PARKED "
+          parked=1
         fi
 
-        # WAITING / DONE: derive from newest cmux notification for this surface.
+        # WAITING / IDLE: derive from newest cmux notification for this surface.
         # Skip WAITING for haiku/dontAsk tier (no human approval needed).
         # Probed by rev4-tests (CLI 2.1.294):
         #   AskUserQuestion  → title="Claude question", subtitle=""
         #   Completion/Stop  → title="Claude Code",     subtitle="Completed in <session>"
         #   PermissionRequest → NOT in list-notifications (uses cmux hooks feed).
-        #     Permission prompts cannot be detected via notifications; tool-approval
-        #     prompts are handled only through the process exit path (DEAD flag).
+        #     Permission prompts cannot be detected via notifications; a teammate
+        #     blocked on one surfaces only as STALLED after 10 min of silence.
         local skip_waiting=
         case "${mdl:-}" in *haiku*|*glm*|*kimi*) skip_waiting=1 ;; esac
         if [ -z "$skip_waiting" ] && declare -f _model_tier >/dev/null 2>&1; then
@@ -221,15 +255,12 @@ _st_row() {
             if [ -n "$notif_line" ]; then
               notif_title=$(awk -F'|' '{print $2}' <<<"$notif_line")
               notif_subtitle=$(awk -F'|' '{print $3}' <<<"$notif_line")
-              # WAITING (AskUserQuestion only; permission prompts not in notifications)
               if [ -z "$skip_waiting" ]; then
-                printf '%s\n' "$notif_title" | grep -qi 'claude question' \
-                  && flags="${flags}WAITING "
+                printf '%s\n' "$notif_title" | grep -qi 'claude question' && waiting=1
               fi
-              # DONE: session completed its last turn but report not yet on disk
+              # Session completed its last turn but report not yet on disk
               if [ "$ms" != reported ]; then
-                printf '%s\n' "$notif_subtitle" | grep -qi '^completed in ' \
-                  && flags="${flags}DONE "
+                printf '%s\n' "$notif_subtitle" | grep -qi '^completed in ' && idle=1
               fi
             fi
           fi
@@ -237,6 +268,20 @@ _st_row() {
       fi
     fi
   fi
+
+  local state; state=$(_st_state "$fin" "$backend" "$alive" "$gone" "$waiting" "$idle" "$stalled")
+
+  # Map the token back onto the FLAGS vocabulary
+  local flags=
+  case $state in
+    FINISHED)   flags=FINISHED ;;
+    DEAD)       flags=DEAD ;;
+    MODEL_GONE) flags=MODEL_GONE ;;
+    WAITING)    flags=WAITING ;;
+    IDLE)       flags=DONE ;;
+    STALLED)    flags='STALLED?' ;;
+  esac
+  [ -n "$parked" ] && flags="${flags:+$flags }PARKED"
 
   printf '%-18s %-14s %-42s %-14s %s\n' \
     "$role" "$ms" "$step" "$la" "${flags:----}"
