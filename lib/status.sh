@@ -222,8 +222,11 @@ _st_row() {
 
   # Liveness / parked-in-lead-pane / WAITING / IDLE (cmux only; skipped once finished)
   if [ -z "$fin" ] && [ "$backend" = cmux ] && command -v cmux >/dev/null; then
+    # DEAD only on _alive's definite answer (not_found / null pane_ref). _alive keeps
+    # the row on any cmux error, so a _pane_of failure after it is an error too: UNKNOWN.
     alive=0
     if _alive cmux "$ref" 2>/dev/null; then
+      alive=
       local pp; pp=$(_pane_of "$ref" 2>/dev/null || echo gone)
       if [ "$pp" != gone ]; then
         alive=1
@@ -396,7 +399,7 @@ PAL = {'alert': (0xFF, 0x45, 0x3A), 'active': (0xAF, 0x52, 0xDE),
        'done': (0x30, 0xD1, 0x58), 'dim': (0x8E, 0x8E, 0x93)}
 #        token        utf8 ascii  word           role
 STATES = {'WAITING':   ('⏸', '!', 'waiting',     'alert'),
-          'MODEL_GONE':('⚠', '!', 'model gone',  'alert'),
+          'MODEL_GONE':('⚠', 'M', 'model gone',  'alert'),
           'DEAD':      ('✗', 'x', 'dead',        'alert'),
           'STALLED':   ('⧗', '~', 'stalled?',    'alert'),
           'WORKING':   ('◐', '*', 'working',     'active'),
@@ -476,7 +479,12 @@ def sym(st):
 total = len(recs)
 done = sum(1 for r in recs if r['ms'] == 'reported' or r['state'] == 'FINISHED')
 sep = ' - ' if ascii_ else ' · '
-out = [f'{team}{sep}{done}/{total} reported{sep}@@CLOCK@@']
+# The clock (8 cols once bash substitutes @@CLOCK@@) is reserved first; the team
+# name gives way, and this line is exempt from clip() so the placeholder stays whole.
+head = f'{team}{sep}{done}/{total} reported{sep}'
+if dw(head) > width - 8:
+    head = fit(head, width - 9).rstrip() + ' '
+out = [head + '@@CLOCK@@']
 barw = max(5, min(20, width - 8))
 filled = (barw * done // total) if total else 0
 pct = (100 * done // total) if total else 0
@@ -494,13 +502,18 @@ if alerts:
     hdr = ('!' if ascii_ else '⚠') + f' NEEDS YOU ({len(alerts)})'
     out.append(paint(hdr, 'alert'))
     agew = max(dw(r['age']) for r in alerts)
+    wordw = max(dw(sym(r['state'])[1]) for r in alerts)
+    # 4 indent + glyph + space + role + 2 + word + 2 + age: role shrinks before word or age
+    arolew = max(3, min(rolew, width - (4 + 2 + 2 + wordw + 2 + agew)))
     for r in alerts:
         s, word, role = sym(r['state'])
         detail = r['note'] or (r['step'] if r['step'] != '-' else '') or HINT[r['state']]
         msg = f'{word}{sep}{detail}'
-        msgw = width - (4 + 2 + rolew + 2 + 2 + agew)
-        line = '    ' + paint(s, 'alert') + ' ' + fit(r['role'], rolew) + '  '
-        line += (fit(msg, msgw) + '  ' if msgw >= 8 else '') + r['age'].rjust(agew)
+        msgw = width - (4 + 2 + arolew + 2 + 2 + agew)
+        if dw(msg) > msgw:
+            msg = word if msgw < dw(word) + dw(sep) + 4 else msg
+        line = '    ' + paint(s, 'alert') + ' ' + fit(r['role'], arolew) + '  '
+        line += fit(msg, max(msgw, dw(word))) + '  ' + r['age'].rjust(agew)
         out.append(line.rstrip())
     out.append('')
 
@@ -513,9 +526,12 @@ if rest:
     labels = [label(r) for r in rest]
     statew = max([dw(s + ' ' + w) for s, w in labels] + [5])
     agew = max([dw(r['age']) for r in rest] + [3])
-    stepw = width - (4 + rolew + 2 + statew + 2 + 2 + agew)
+    # role shrinks first (to 3), then the state word, so ROLE + STATE + AGE survive
+    trolew = max(3, min(rolew, width - (4 + 2 + statew + 2 + agew)))
+    statew = max(3, min(statew, width - (4 + trolew + 2 + 2 + agew)))
+    stepw = width - (4 + trolew + 2 + statew + 2 + 2 + agew)
     show_step = width >= 60 and stepw >= 8
-    head = '    ' + fit('ROLE', rolew) + '  ' + fit('STATE', statew) + '  '
+    head = '    ' + fit('ROLE', trolew) + '  ' + fit('STATE', statew) + '  '
     head += (fit('STEP', stepw) + '  ' if show_step else '') + 'AGE'.rjust(agew)
     out.append(paint(head.rstrip(), 'dim'))
     for r, (s, word) in zip(rest, labels):
@@ -523,12 +539,28 @@ if rest:
         step = r['step']
         if r['note']:
             step = r['note'] if step == '-' else f"{r['note']}{sep}{step}"
-        line = '  ' + ('-' if ascii_ else '·') + ' ' + fit(r['role'], rolew) + '  '
+        line = '  ' + ('-' if ascii_ else '·') + ' ' + fit(r['role'], trolew) + '  '
         line += paint(s, role) + ' ' + fit(word, statew - dw(s) - 1) + '  '
         line += (fit(step, stepw) + '  ' if show_step else '') + r['age'].rjust(agew)
         out.append(line.rstrip())
 
-print('\n'.join(out))
+def clip(line):
+    # Last guard: no line wider than the pane. Escape sequences cost no width;
+    # cut on a cluster boundary and close any open colour.
+    vis, res, i = 0, '', 0
+    while i < len(line):
+        if line[i] == '\x1b':
+            j = line.index('m', i) + 1
+            res += line[i:j]; i = j; continue
+        cl = line[i]; i += 1
+        while i < len(line) and line[i] != '\x1b' and cw(line[i]) == 0:
+            cl += line[i]; i += 1
+        if vis + dw(cl) > width:
+            return res + ('\x1b[0m' if color else '')
+        res += cl; vis += dw(cl)
+    return res
+
+print('\n'.join([out[0]] + [clip(l) for l in out[1:]]))
 PY
 
 # _st_cols: terminal width. TEAM_COLS wins (tests), else `tput cols` — never $COLUMNS,
@@ -622,9 +654,13 @@ sub_status() {
     recs=$(_st_collect "$team" || true)
     frame=$(printf '%s\n' "$recs" | _st_frame "$team" "$(_st_cols)" "$color" "$ascii")
     if [ "$frame" != "$prev" ]; then
-      clear
+      clear || true
       printf '%s\n' "${frame/@@CLOCK@@/$(date '+%H:%M:%S')}"
       prev=$frame
+    elif [ -t 1 ]; then
+      # Unchanged frame: rewrite only the summary line so the clock shows the loop is alive
+      local head=${frame%%$'\n'*}
+      printf '\033[s\033[H%s\033[K\033[u' "${head/@@CLOCK@@/$(date '+%H:%M:%S')}"
     fi
     _st_sync_apply "$team" "$recs" || true
     sleep "$interval"
@@ -746,7 +782,7 @@ _st_sync_apply() {
   [ -n "${CMUX_WORKSPACE_ID:-}" ] || return 0
   local ws="$CMUX_WORKSPACE_ID" key="team-$team"
 
-  local total=0 reported=0 needs=0 started=0
+  local total=0 reported=0 needs=0 started=
   local role title state ms _step _age _note
   while IFS=$'\t' read -r role title state ms _step _age _note; do
     [ -n "$title" ] || continue
@@ -801,8 +837,7 @@ _st_sync_apply() {
     prev=$(awk -F'\t' -v t="$title" '$1==t {print; exit}' <<<"$prev_rows" 2>/dev/null || true)
     pstate=$(awk -F'\t' '{print $2}' <<<"$prev"); pms=$(awk -F'\t' '{print $3}' <<<"$prev")
     msg= lvl=
-    if [ -z "$prev" ]; then msg=spawned lvl=progress
-    elif [ "$state" != "$pstate" ]; then
+    if [ -z "$prev" ] || [ "$state" != "$pstate" ]; then
       case $state in
         WAITING)    msg="waiting (needs input)" lvl=warning ;;
         IDLE)       msg="idle (turn ended without a report)" lvl=info ;;
@@ -811,6 +846,7 @@ _st_sync_apply() {
         MODEL_GONE) msg="model gone" lvl=error ;;
         FINISHED)   msg=finished lvl=success ;;
       esac
+      [ -z "$prev" ] && [ -z "$msg" ] && msg=spawned lvl=progress
     fi
     if [ "$ms" = reported ] && [ "$pms" != reported ] && [ -z "$msg" ]; then
       msg=reported lvl=success
