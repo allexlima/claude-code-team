@@ -51,10 +51,10 @@ if ! declare -f _alive >/dev/null 2>&1; then
 fi
 
 # ---------------------------------------------------------------------------
-# _st_row <row> <run> <leadpane>: render one registry row as a table line
+# _st_row <row> <run> <leadpane> <team>: render one registry row as a table line
 # ---------------------------------------------------------------------------
 _st_row() {
-  local row="$1" run="$2" leadpane="$3"
+  local row="$1" run="$2" leadpane="$3" team="$4"
 
   local backend ref lay title mdl submdl rundir
   backend=$(awk '{print $1}' <<<"$row")
@@ -65,7 +65,8 @@ _st_row() {
   submdl=$(awk 'NF>=6{print $6}' <<<"$row")
   rundir=$(awk 'NF>=7{print $7}' <<<"$row")
 
-  local role="${title#*-}"
+  # Fix 2: strip exact team prefix to handle team slugs with hyphens
+  local role="${title#"$team"-}"
 
   # Registry col 7 (rundir) wins over the caller-supplied run fallback
   local effective_run="$run"
@@ -77,6 +78,10 @@ _st_row() {
   if [ -n "$effective_run" ]; then
     rpt="$effective_run/reports/$role.md"
     stf="$effective_run/status/$role.txt"
+    # Fix 9: some teammates may use <team>-<role>.txt; accept both
+    if [ ! -f "$stf" ] && [ -f "$effective_run/status/$title.txt" ]; then
+      stf="$effective_run/status/$title.txt"
+    fi
   fi
 
   # ------ MILESTONE -------------------------------------------------------
@@ -87,8 +92,9 @@ _st_row() {
     ms=investigating
     grep -qi 'draft' "$stf" 2>/dev/null && ms=drafting
   fi
-  if [ -n "$effective_run" ] && [ -f "$effective_run/tasks.md" ]; then
-    grep -q "\[x\].*$role" "$effective_run/tasks.md" 2>/dev/null && ms=challenged
+  # Fix 3: tasks.md tick means "reported" (not "challenged"); use exact match
+  if [ "$ms" != reported ] && [ -n "$effective_run" ] && [ -f "$effective_run/tasks.md" ]; then
+    grep -qF -- "- [x] $title:" "$effective_run/tasks.md" 2>/dev/null && ms=reported
   fi
 
   # ------ STEP (last line of status file, max 40 chars) -------------------
@@ -121,7 +127,7 @@ _st_row() {
       [ "$newest" -gt 0 ] && [ "$age" -ge 10 ] && flags="${flags}STALLED? " ;;
   esac
 
-  # MODEL GONE (N3): check main model col and subagent model col
+  # MODEL_GONE (N3): check main model col and subagent model col
   local m
   for m in "$mdl" "$submdl"; do
     [ -z "$m" ] || [ "$m" = "-" ] && continue
@@ -151,8 +157,9 @@ _st_row() {
         if [ -z "$skip_prompt" ]; then
           local screen
           screen=$(cmux read-screen --surface "$ref" --lines 10 2>/dev/null || true)
+          # Fix 1: match actual CLI 2.1.294 modal text
           printf '%s\n' "$screen" \
-            | grep -qiE 'Allow tool:|Trust this folder' \
+            | grep -qiE 'Do you want to proceed|Yes, I trust this folder|Do you want to (make|create)' \
             && flags="${flags}PROMPT "
         fi
       fi
@@ -165,9 +172,9 @@ _st_row() {
     "$role" "$ms" "$step" "$la" "${flags:----}"
 }
 
-# _st_table <reg> <run> <leadpane>: print header + one row per non-dash teammate
+# _st_table <reg> <run> <leadpane> <team>: header + one row per non-dash teammate
 _st_table() {
-  local reg="$1" run="$2" leadpane="$3"
+  local reg="$1" run="$2" leadpane="$3" team="$4"
 
   printf '%-18s %-14s %-42s %-14s %s\n' ROLE MILESTONE STEP LAST_ACTIVITY FLAGS
 
@@ -184,14 +191,12 @@ _st_table() {
 
   while IFS= read -r row; do
     [ -z "$row" ] && continue
-    _st_row "$row" "$run" "$leadpane"
+    _st_row "$row" "$run" "$leadpane" "$team"
   done <<<"$deduped"
 }
 
 # ---------------------------------------------------------------------------
-# sub_status <team> [--watch goes before team] — called as: sub_status "$@"
-# Actually: team.sh dispatch does: sub_status "$@" where $@ is remaining args
-# Usage: status [--watch] <team>
+# sub_status [--watch] <team>
 # Exit: 0 ok, 3 no registry
 # ---------------------------------------------------------------------------
 
@@ -220,11 +225,11 @@ sub_status() {
     while true; do
       clear
       printf 'team %s — %s\n' "$team" "$(date '+%H:%M:%S')"
-      _st_table "$reg" "$run" "$leadpane"
+      _st_table "$reg" "$run" "$leadpane" "$team"
       sleep "${TEAM_STATUS_INTERVAL:-30}"
     done
   else
-    _st_table "$reg" "$run" "$leadpane"
+    _st_table "$reg" "$run" "$leadpane" "$team"
   fi
 }
 
@@ -237,15 +242,30 @@ sub_status() {
 sub_monitor() {
   local team=${1:?team}
   local reg; reg=$(_reg "$team")
+  # Fix 6: validate interval is a positive integer
   local interval=${TEAM_STATUS_INTERVAL:-30}
+  case ${interval:-} in *[!0-9]*|'') interval=30 ;; esac
   local title="$team-monitor"
 
-  # Single-instance guard (N11): refuse if a dash row with this title already exists
-  if [ -f "$reg" ] \
-      && awk -v t="$title" '$4==t && $3=="dash"{f=1} END{exit !f}' "$reg" 2>/dev/null; then
-    printf 'monitor: dashboard %q already registered for team %q\n' "$title" "$team" >&2
-    printf '  Reopen: team.sh close %q first.\n' "$team" >&2
-    return 1
+  # Fix 4: single-instance guard — refuse only when the existing pane is LIVE.
+  # If the row exists but the surface is dead (manually closed), prune and proceed.
+  if [ -f "$reg" ]; then
+    local ex_row
+    ex_row=$(awk -v t="$title" '$4==t && $3=="dash"{print $0; exit}' "$reg" 2>/dev/null || true)
+    if [ -n "$ex_row" ]; then
+      local ex_backend ex_ref
+      ex_backend=$(awk '{print $1}' <<<"$ex_row")
+      ex_ref=$(awk '{print $2}' <<<"$ex_row")
+      if _alive "$ex_backend" "$ex_ref" 2>/dev/null; then
+        printf 'monitor: dashboard %q already running for team %q\n' "$title" "$team" >&2
+        printf '  Stop it first: team.sh close %q\n' "$team" >&2
+        return 1
+      else
+        # Dead row: prune it and allow a fresh spawn
+        local tmp; tmp=$(mktemp)
+        awk -v t="$title" '!($4==t && $3=="dash")' "$reg" > "$tmp" && mv "$tmp" "$reg" || true
+      fi
+    fi
   fi
 
   # Build the loop command string.
@@ -261,8 +281,15 @@ sub_monitor() {
 
   if [ -n "${CMUX_WORKSPACE_ID:-}" ] && command -v cmux >/dev/null; then
     local out ref
-    out=$(cmux new-surface --type terminal --workspace "$CMUX_WORKSPACE_ID" \
-          --command "$cmd" --focus false)
+    # Fix 5: use new-split down (pane) instead of new-surface (tab); fall back
+    # to new-surface if CMUX_SURFACE_ID is not set.
+    if [ -n "${CMUX_SURFACE_ID:-}" ]; then
+      out=$(cmux new-split down --surface "$CMUX_SURFACE_ID" \
+            --command "$cmd" --focus false)
+    else
+      out=$(cmux new-surface --type terminal --workspace "$CMUX_WORKSPACE_ID" \
+            --command "$cmd" --focus false)
+    fi
     ref=$(awk '{print $2}' <<<"$out")
     cmux rename-tab --surface "$ref" "$title" >/dev/null
     # Register with dash layout; model cols are placeholders (–)
