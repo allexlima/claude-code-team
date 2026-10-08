@@ -1,27 +1,97 @@
 #!/usr/bin/env bash
-# lib/status.sh — sub_status and sub_monitor functions for team.sh
+# lib/status.sh — sub_status, sub_monitor, sub_sync functions for team.sh
 # Sourced by team.sh after helpers are defined (set -euo pipefail is already on).
 # Functions only; no top-level side effects.
 #
 # Requires team.sh globals/functions (bound before sourcing):
 #   $here              absolute dir of team.sh
 #   _root              prints main checkout root (main worktree)
-#   _team_models       emits label<TAB>id<TAB>tier TSV
 #   _reg <team>        prints /tmp/team-<team>.tabs
+#   _reg_add <team> <ref> <layout> <title> <model|-> <submodel|-> <rundir|->
+#                      appends a registry row (root col appended automatically)
 #   _pane_of <ref>     prints cmux pane_ref or "gone" (cmux only)
 #   _lead_pane         prints "<pane_ref> <surface_ref>" of caller's session
 #   _model_tier <m>    prints opus|sonnet|haiku or empty
 #   _model_gone <m>    returns 0 if model not in org picker (fallback defined below)
 #   _alive <b> <r>     returns 0 if surface/pane exists (fallback defined below)
+#   _require_cmux [ws] exits 3 if cmux absent/unhealthy; ws also checks CMUX_*IDs
+#   _lock <file>       acquire lock; EXIT trap set for cleanup
 #
-# Registry row format (team.sh):
-#   backend ref layout title model submodel rundir
+# Registry row format (team.sh, 8 cols):
+#   backend ref layout title model submodel rundir root
 #   col 3 layout ∈ pane|tab|dash  (dash = monitor row, excluded from status table)
 #   col 6 CLAUDE_CODE_SUBAGENT_MODEL id or "-" (absent on old rows → "")
 #   col 7 absolute run dir or "-" (absent on old rows → "")
+#   col 8 project root or "-" (absent on old rows → "")
+#
+# Module-level state (reset by each _st_table call):
+#   _ST_UUID_MAP   "surface:N=UUID\n…" built from cmux list-panes (one python3 call)
+#   _ST_NOTIF_DATA "UUID|title|subtitle\n…" from cmux list-notifications --json
+#
+# FLAGS column note — WAITING covers AskUserQuestion only (title="Claude question").
+# Tool-approval permission prompts go to `cmux hooks feed`, NOT list-notifications,
+# so a teammate blocked on a permission prompt shows no WAITING flag; STALLED? fires
+# after 10 min of filesystem silence. This is a known gap (probed by rev4-tests).
+
+_ST_UUID_MAP=
+_ST_NOTIF_DATA=
+
+# ---------------------------------------------------------------------------
+# Fallback helpers — activate only when team.sh hasn't defined them
+# ---------------------------------------------------------------------------
+
+if ! declare -f _model_gone >/dev/null 2>&1; then
+  _model_gone() {
+    declare -f _team_models >/dev/null 2>&1 || return 1
+    local m="$1"
+    _team_models 2>/dev/null | awk -v m="$m" '
+      $2==m || $1==m { found=1 }
+      END { exit (found ? 1 : 0) }
+    '
+  }
+fi
+
+if ! declare -f _alive >/dev/null 2>&1; then
+  _alive() {
+    local backend="$1" ref="$2"
+    case $backend in
+      cmux)
+        command -v cmux >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 || return 0
+        local out
+        out=$(cmux identify --surface "$ref" 2>&1) \
+          || { case $out in *not_found*) return 1 ;; esac; return 0; }
+        ;;
+      *) return 0 ;;  # non-cmux: assume alive (conservative)
+    esac
+  }
+fi
+
+if ! declare -f _require_cmux >/dev/null 2>&1; then
+  _require_cmux() {
+    command -v cmux >/dev/null 2>&1 \
+      || { printf 'team.sh: cmux not found — install from https://cmux.app\n' >&2; return 3; }
+    cmux ping >/dev/null 2>&1 \
+      || { printf 'team.sh: cmux not responding (cmux ping failed)\n' >&2; return 3; }
+    if [ "${1:-}" = ws ]; then
+      [ -n "${CMUX_WORKSPACE_ID:-}" ] && [ -n "${CMUX_SURFACE_ID:-}" ] \
+        || { printf 'team.sh: must run inside a cmux pane\n' >&2; return 3; }
+    fi
+  }
+fi
+
+if ! declare -f _reg_add >/dev/null 2>&1; then
+  _reg_add() {
+    local team="$1" ref="$2" lay="$3" title="$4" mdl="${5:--}" smdl="${6:--}" rdir="${7:--}"
+    local root; root=$(_root 2>/dev/null || pwd)
+    printf 'cmux %s %s %s %s %s %s %s\n' \
+      "$ref" "$lay" "$title" "$mdl" "$smdl" "$rdir" "$root" \
+      >> "$(_reg "$team")"
+  }
+fi
 
 # ---------------------------------------------------------------------------
 # _st_row <row> <run> <leadpane> <team>: render one registry row as a table line
+# Reads module globals: _ST_UUID_MAP, _ST_NOTIF_DATA
 # ---------------------------------------------------------------------------
 _st_row() {
   local row="$1" run="$2" leadpane="$3" team="$4"
@@ -35,7 +105,7 @@ _st_row() {
   submdl=$(awk 'NF>=6{print $6}' <<<"$row")
   rundir=$(awk 'NF>=7{print $7}' <<<"$row")
 
-  # Fix 2: strip exact team prefix to handle team slugs with hyphens
+  # Strip exact team prefix to handle team slugs with hyphens
   local role="${title#"$team"-}"
 
   # Registry col 7 (rundir) wins over the caller-supplied run fallback
@@ -48,7 +118,7 @@ _st_row() {
   if [ -n "$effective_run" ]; then
     rpt="$effective_run/reports/$role.md"
     stf="$effective_run/status/$role.txt"
-    # Fix 9: some teammates may use <team>-<role>.txt; accept both
+    # Some teammates may use <team>-<role>.txt; accept both
     if [ ! -f "$stf" ] && [ -f "$effective_run/status/$title.txt" ]; then
       stf="$effective_run/status/$title.txt"
     fi
@@ -62,13 +132,11 @@ _st_row() {
     ms=investigating
     grep -qi 'draft' "$stf" 2>/dev/null && ms=drafting
   fi
-  # Fix 3: tasks.md tick means "reported" (not "challenged"); use exact match
   if [ "$ms" != reported ] && [ -n "$effective_run" ] && [ -f "$effective_run/tasks.md" ]; then
     grep -qF -- "- [x] $title:" "$effective_run/tasks.md" 2>/dev/null && ms=reported
   fi
 
   # ------ STEP (last line of status file, max 40 chars) -------------------
-  # Use ASCII '-' not '—' (em-dash is 3 bytes; printf %-Ns pads by bytes, misaligning)
   local step='-'
   if [ -n "$stf" ] && [ -f "$stf" ]; then
     local raw; raw=$(tail -1 "$stf" 2>/dev/null | cut -c1-40) || true
@@ -105,38 +173,59 @@ _st_row() {
     _model_gone "$m" 2>/dev/null && { flags="${flags}MODEL_GONE "; break; }
   done
 
-  # DEAD / PARKED / PROMPT
+  # DEAD / PARKED / WAITING (cmux only)
   if [ "$backend" = cmux ] && command -v cmux >/dev/null; then
     if ! _alive cmux "$ref" 2>/dev/null; then
       flags="${flags}DEAD "
-    elif [ -n "$leadpane" ]; then
+    else
       local pp; pp=$(_pane_of "$ref" 2>/dev/null || echo gone)
       if [ "$pp" = gone ]; then
         flags="${flags}DEAD "
-      elif [ "$pp" = "$leadpane" ]; then
-        flags="${flags}PARKED "
-        # Skip PROMPT for parked surfaces: background-tab cmux read-screen
-        # is unverified; skip to avoid false positives.
       else
-        # PROMPT: skip haiku-tier (dontAsk mode, no human approval needed)
-        local skip_prompt=
-        case "${mdl:-}" in *haiku*|*glm*|*kimi*) skip_prompt=1 ;; esac
-        if [ -z "$skip_prompt" ] && declare -f _model_tier >/dev/null 2>&1; then
-          local tier; tier=$(_model_tier "${mdl:-}" 2>/dev/null || true)
-          [ "$tier" = haiku ] && skip_prompt=1
+        # PARKED: pane_ref matches lead (only when lead context available)
+        if [ -n "$leadpane" ] && [ "$pp" = "$leadpane" ]; then
+          flags="${flags}PARKED "
         fi
-        if [ -z "$skip_prompt" ]; then
-          local screen
-          screen=$(cmux read-screen --surface "$ref" --lines 10 2>/dev/null || true)
-          # Fix 1: match actual CLI 2.1.294 modal text
-          printf '%s\n' "$screen" \
-            | grep -qiE 'Do you want to proceed|Yes, I trust this folder|Do you want to (make|create)' \
-            && flags="${flags}PROMPT "
+
+        # WAITING / DONE: derive from newest cmux notification for this surface.
+        # Skip WAITING for haiku/dontAsk tier (no human approval needed).
+        # Probed by rev4-tests (CLI 2.1.294):
+        #   AskUserQuestion  → title="Claude question", subtitle=""
+        #   Completion/Stop  → title="Claude Code",     subtitle="Completed in <session>"
+        #   PermissionRequest → NOT in list-notifications (uses cmux hooks feed).
+        #     Permission prompts cannot be detected via notifications; tool-approval
+        #     prompts are handled only through the process exit path (DEAD flag).
+        local skip_waiting=
+        case "${mdl:-}" in *haiku*|*glm*|*kimi*) skip_waiting=1 ;; esac
+        if [ -z "$skip_waiting" ] && declare -f _model_tier >/dev/null 2>&1; then
+          local tier; tier=$(_model_tier "${mdl:-}" 2>/dev/null || true)
+          [ "$tier" = haiku ] && skip_waiting=1
+        fi
+        if [ -n "$_ST_UUID_MAP" ] && [ -n "$_ST_NOTIF_DATA" ]; then
+          local uuid
+          uuid=$(awk -F'=' -v r="$ref" '$1==r {print $2; exit}' <<<"$_ST_UUID_MAP" 2>/dev/null || true)
+          if [ -n "$uuid" ]; then
+            local notif_line notif_title notif_subtitle
+            notif_line=$(awk -F'|' -v u="$uuid" '$1==u {print; exit}' \
+                         <<<"$_ST_NOTIF_DATA" 2>/dev/null || true)
+            if [ -n "$notif_line" ]; then
+              notif_title=$(awk -F'|' '{print $2}' <<<"$notif_line")
+              notif_subtitle=$(awk -F'|' '{print $3}' <<<"$notif_line")
+              # WAITING (AskUserQuestion only; permission prompts not in notifications)
+              if [ -z "$skip_waiting" ]; then
+                printf '%s\n' "$notif_title" | grep -qi 'claude question' \
+                  && flags="${flags}WAITING "
+              fi
+              # DONE: session completed its last turn but report not yet on disk
+              if [ "$ms" != reported ]; then
+                printf '%s\n' "$notif_subtitle" | grep -qi '^completed in ' \
+                  && flags="${flags}DONE "
+              fi
+            fi
+          fi
         fi
       fi
     fi
-  elif [ "$backend" = tmux ]; then
-    _alive tmux "$ref" 2>/dev/null || flags="${flags}DEAD "
   fi
 
   printf '%-18s %-14s %-42s %-14s %s\n' \
@@ -148,6 +237,76 @@ _st_table() {
   local reg="$1" run="$2" leadpane="$3" team="$4"
 
   printf '%-18s %-14s %-42s %-14s %s\n' ROLE MILESTONE STEP LAST_ACTIVITY FLAGS
+
+  # Build surface ref → UUID map (single python3 call).
+  # list-panes --json has surface_refs[] + surface_ids[] in parallel arrays.
+  _ST_UUID_MAP=
+  if command -v cmux >/dev/null && command -v python3 >/dev/null \
+      && [ -n "${CMUX_WORKSPACE_ID:-}" ]; then
+    _ST_UUID_MAP=$(python3 -c "
+import json, subprocess, os, sys
+ws = os.environ.get('CMUX_WORKSPACE_ID', '')
+if not ws:
+    sys.exit(0)
+try:
+    r = subprocess.run(['cmux', 'list-panes', '--workspace', ws, '--json'],
+                      capture_output=True, text=True, timeout=5)
+    data = json.loads(r.stdout)
+    for pane in data.get('panes', []):
+        for ref, uid in zip(pane.get('surface_refs', []),
+                            pane.get('surface_ids', [])):
+            print(ref + '=' + uid)
+except Exception:
+    pass
+" 2>/dev/null || true)
+  fi
+
+  # Build team UUID set from registry refs (used to filter notification data).
+  local _st_team_uuids=""
+  if [ -n "$_ST_UUID_MAP" ]; then
+    while IFS= read -r row; do
+      [ -z "$row" ] && continue
+      local _lay _ref _uid
+      _lay=$(awk '{print $3}' <<<"$row")
+      [ "$_lay" = dash ] && continue
+      _ref=$(awk '{print $2}' <<<"$row")
+      _uid=$(awk -F'=' -v r="$_ref" '$1==r {print $2; exit}' <<<"$_ST_UUID_MAP" 2>/dev/null || true)
+      [ -n "$_uid" ] && _st_team_uuids="$_st_team_uuids $_uid"
+    done < "$reg"
+    _st_team_uuids="${_st_team_uuids# }"
+  fi
+
+  # Fetch notifications for WAITING state detection.
+  # Privacy: filter to team surface UUIDs only; never emit body.
+  # Stale-state: keep NEWEST notification per surface (by created_at), regardless
+  # of read state, so a stale "waiting" cleared by a newer "Completed" won't fire.
+  _ST_NOTIF_DATA=
+  if command -v cmux >/dev/null && command -v python3 >/dev/null; then
+    _ST_NOTIF_DATA=$(export _ST_TEAM_UUIDS="$_st_team_uuids"; python3 -c "
+import json, subprocess, sys, os
+team_uuids = set(os.environ.get('_ST_TEAM_UUIDS', '').split())
+try:
+    r = subprocess.run(['cmux', 'list-notifications', '--json'],
+                      capture_output=True, text=True, timeout=5)
+    newest = {}  # surface_id -> newest notification dict
+    for n in json.loads(r.stdout):
+        sid = n.get('surface_id', '')
+        if not sid:
+            continue
+        if team_uuids and sid not in team_uuids:
+            continue  # filter to team surfaces only
+        ts = n.get('created_at', '')
+        if sid not in newest or ts > newest[sid].get('created_at', ''):
+            newest[sid] = n
+    for sid, n in newest.items():
+        # Replace | in title/subtitle to keep pipe-split safe; never emit body
+        title = n.get('title', '').replace('|', ' ')
+        subtitle = n.get('subtitle', '').replace('|', ' ')
+        print(sid + '|' + title + '|' + subtitle)
+except Exception:
+    pass
+" 2>/dev/null || true)
+  fi
 
   # Deduplicate by title (last row wins, first-appearance order, dash excluded)
   local deduped
@@ -187,7 +346,7 @@ sub_status() {
   # Resolve lead's pane_ref for PARKED detection.
   # When running inside the monitor loop, sub_monitor pre-sets TEAM_LEAD_PANE so
   # _lead_pane (which identifies the calling pane) returns the monitor's own pane
-  # rather than the lead's pane — making PARKED/PROMPT detection wrong.
+  # rather than the lead's pane — making PARKED detection wrong.
   local leadpane=
   if command -v cmux >/dev/null && [ -n "${CMUX_WORKSPACE_ID:-}" ]; then
     if [ -n "${TEAM_LEAD_PANE:-}" ]; then
@@ -199,7 +358,7 @@ sub_status() {
   fi
 
   if [ -n "$watch" ]; then
-    # N9: $(date ...) is in the loop body — evaluated each iteration, not frozen.
+    # \$(date ...) is in the loop body — evaluated each iteration, not frozen.
     while true; do
       clear
       printf 'team %s — %s\n' "$team" "$(date '+%H:%M:%S')"
@@ -214,25 +373,27 @@ sub_status() {
 # ---------------------------------------------------------------------------
 # sub_monitor <team>
 # Opens one auto-refreshing status pane with layout=dash (not a teammate).
-# Exit: 0 ok (incl. no-backend print), 1 already-running
+# Requires cmux with workspace context (_require_cmux ws).
+# Exit: 0 ok, 1 already-running, 3 cmux unavailable
 # ---------------------------------------------------------------------------
 
 sub_monitor() {
   local team=${1:?team}
+
+  # cmux with workspace context is a hard requirement (decision 1)
+  _require_cmux ws
+
   local reg; reg=$(_reg "$team")
-  # Fix 6: validate interval is a positive integer
   local interval=${TEAM_STATUS_INTERVAL:-30}
   case ${interval:-} in *[!0-9]*|'') interval=30 ;; esac
   local title="$team-monitor"
 
   # Capture lead's pane_ref NOW (running as the lead).
-  # Baked into the status loop so PARKED/PROMPT detection is correct inside the
+  # Baked into the status loop so PARKED detection is correct inside the
   # monitor pane (where _lead_pane would otherwise resolve to the monitor itself).
   local lead_pane=
-  if command -v cmux >/dev/null && [ -n "${CMUX_WORKSPACE_ID:-}" ]; then
-    local lp; lp=$(_lead_pane 2>/dev/null || true)
-    lead_pane="${lp%% *}"
-  fi
+  local lp; lp=$(_lead_pane 2>/dev/null || true)
+  lead_pane="${lp%% *}"
   local lead_pane_q; lead_pane_q=$(printf '%q' "$lead_pane")
 
   # Acquire registry lock: makes single-instance check + append atomic vs spawn.
@@ -253,7 +414,7 @@ sub_monitor() {
         printf '  Stop it first: team.sh close %q\n' "$team" >&2
         return 1
       else
-        # Dead row: prune in-place (named temp avoids mktemp; no EXIT trap conflict)
+        # Dead row: prune in-place
         local prunetmp="$reg.pruning-$$"
         awk -v t="$title" '!($4==t && $3=="dash")' "$reg" > "$prunetmp" \
           && mv "$prunetmp" "$reg" || rm -f "$prunetmp"
@@ -262,44 +423,150 @@ sub_monitor() {
   fi
 
   # Build the loop command string.
-  # N9: \$(date ...) leaves a literal $(date ...) in cmd; the executing shell
-  #     evaluates it each loop iteration (not at assignment time).
-  # N11: while [ -f <reg> ] exits automatically when the team is closed
-  #      (close removes the registry), leaving no orphan process.
-  # TEAM_LEAD_PANE is baked in so sub_status inside the loop uses the lead's pane
-  # rather than the monitor pane's own pane_ref for PARKED/PROMPT detection.
+  # \$(date ...) leaves a literal $(date ...) so the executing shell evaluates
+  # it each loop iteration. while [ -f <reg> ] exits when close removes the
+  # registry (no orphan process). TEAM_LEAD_PANE is baked in for correct
+  # PARKED detection inside the monitor pane.
   local reg_q; reg_q=$(printf '%q' "$reg")
   local team_q; team_q=$(printf '%q' "$team")
   local script_q; script_q=$(printf '%q' "$here/team.sh")
   # shellcheck disable=SC2016  # intentional: \$() must not expand at assignment
-  local cmd="while [ -f $reg_q ]; do clear; printf 'team %s -- %s\\n' $team_q \"\$(date '+%H:%M:%S')\"; TEAM_LEAD_PANE=$lead_pane_q bash $script_q status $team_q; sleep $interval; done"
+  local cmd="while [ -f $reg_q ]; do clear; printf 'team %s -- %s\\n' $team_q \"\$(date '+%H:%M:%S')\"; TEAM_LEAD_PANE=$lead_pane_q bash $script_q status $team_q; bash $script_q sync $team_q 2>/dev/null || true; sleep $interval; done"
 
-  if [ -n "${CMUX_WORKSPACE_ID:-}" ] && command -v cmux >/dev/null; then
-    local out ref
-    # Fix 5: use new-split down (pane) instead of new-surface (tab); fall back
-    # to new-surface if CMUX_SURFACE_ID is not set.
-    if [ -n "${CMUX_SURFACE_ID:-}" ]; then
-      out=$(cmux new-split down --surface "$CMUX_SURFACE_ID" \
-            --command "$cmd" --focus false)
-    else
-      out=$(cmux new-surface --type terminal --workspace "$CMUX_WORKSPACE_ID" \
-            --command "$cmd" --focus false)
-    fi
-    ref=$(awk '{print $2}' <<<"$out")
-    cmux rename-tab --surface "$ref" "$title" >/dev/null
-    # Register: backend ref layout title model submodel rundir (all 7 cols)
-    printf 'cmux %s dash %s - - -\n' "$ref" "$title" >> "$reg"
-    printf 'monitor pane: %s\n' "$title"
-  elif [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ]; then
-    local id
-    id=$(tmux split-window -t "$TMUX_PANE" -d -P -F '#{pane_id}' "$cmd")
-    tmux select-pane -t "$id" -T "$title"
-    printf 'tmux %s dash %s - - -\n' "$id" "$title" >> "$reg"
-    printf 'monitor pane: %s in tmux\n' "$title"
-  else
-    # No cmux/tmux backend: print the command for the user to run manually
-    printf 'monitor: no cmux or tmux backend — run this to watch the team:\n'
-    printf '  %s\n' "$cmd"
+  local out ref
+  out=$(cmux new-split down --surface "$CMUX_SURFACE_ID" \
+        --command "$cmd" --focus false)
+  ref=$(awk '{print $2}' <<<"$out")
+  cmux rename-tab --surface "$ref" "$title" >/dev/null
+  _reg_add "$team" "$ref" dash "$title" - - -
+  printf 'monitor pane: %s\n' "$title"
+}
+
+# ---------------------------------------------------------------------------
+# sub_sync [--clear] <team>
+# Update the lead workspace sidebar: status pill (team-<team>) + progress bar.
+# --clear: remove the pill and progress bar (called when the team closes).
+# Exit: always 0 (cmux errors warn only; use return, never exit).
+# ---------------------------------------------------------------------------
+
+sub_sync() {
+  local clear=
+  case "${1:-}" in --clear) clear=1; shift ;; esac
+  local team=${1:?team}
+
+  command -v cmux >/dev/null 2>&1 || return 0
+  [ -n "${CMUX_WORKSPACE_ID:-}" ] || return 0
+
+  local ws="$CMUX_WORKSPACE_ID"
+  local key="team-$team"  # per-team key prevents two teams clobbering each other
+
+  if [ -n "$clear" ]; then
+    cmux clear-status "$key" --workspace "$ws" 2>/dev/null || true
+    # Only clear the progress bar if no other team-* key exists in this workspace.
+    # clear-progress is workspace-wide; two teams sharing a workspace must not
+    # wipe each other's bar.
+    local other_key
+    other_key=$(cmux list-status --workspace "$ws" 2>/dev/null \
+      | grep -oE '^team-[^=]+' | grep -vF "$key" | head -1 || true)
+    [ -z "$other_key" ] && cmux clear-progress --workspace "$ws" 2>/dev/null || true
+    cmux log --source team --level info "team $team: closed" \
+      --workspace "$ws" 2>/dev/null || true
+    # Remove state file so a reuse of this slug starts fresh
+    rm -f "$(dirname "$(_reg "$team")")/team-$team.sync" 2>/dev/null || true
     return 0
   fi
+
+  local reg; reg=$(_reg "$team")
+  [ -f "$reg" ] || return 0
+
+  # Count total teammates and how many have reported (non-dash rows only).
+  local total=0 reported=0
+  local root; root=$(_root)
+  local fallback_run; fallback_run=$(ls -dt "$root/.team/runs/"*"-$team" 2>/dev/null | head -1 || true)
+
+  while IFS= read -r row; do
+    [ -z "$row" ] && continue
+    local lay; lay=$(awk '{print $3}' <<<"$row")
+    [ "$lay" = dash ] && continue
+    total=$((total + 1))
+    local title rundir
+    title=$(awk '{print $4}' <<<"$row")
+    rundir=$(awk 'NF>=7{print $7}' <<<"$row")
+    [ "${rundir:-}" = - ] && rundir=
+    local run="${rundir:-$fallback_run}"
+    local role="${title#"$team"-}"
+    if [ -n "$run" ] && [ -f "$run/reports/$role.md" ]; then
+      reported=$((reported + 1))
+    elif [ -n "$run" ] && [ -f "$run/tasks.md" ] \
+        && grep -qF -- "- [x] $title:" "$run/tasks.md" 2>/dev/null; then
+      reported=$((reported + 1))
+    fi
+  done < "$reg"
+
+  # Phase label
+  local phase
+  if [ "$total" -eq 0 ]; then
+    phase="spawning"
+  elif [ "$reported" -ge "$total" ]; then
+    phase="done"
+  elif [ "$reported" -gt 0 ]; then
+    phase="working"
+  else
+    phase="spawning"
+  fi
+
+  # Progress fraction 0.0-1.0
+  local frac="0.0"
+  if [ "$total" -gt 0 ] && command -v python3 >/dev/null 2>&1; then
+    frac=$(python3 -c "print(f'{$reported/$total:.2f}')" 2>/dev/null) || frac="0.0"
+  fi
+
+  # Compute pill text
+  local pill="$phase · $reported/$total reported"
+
+  # Update sidebar (never fatal; use per-team key and explicit workspace)
+  cmux set-status "$key" "$pill" \
+    --icon sparkle --color "#4C8DFF" --workspace "$ws" 2>/dev/null || true
+  cmux set-progress "$frac" --label "$team" --workspace "$ws" 2>/dev/null || true
+
+  # Transition logging: log when pill or per-teammate state changes.
+  # State file: first line = last pill, subsequent lines = reported titles.
+  # Derived from _reg's directory so TEAM_REG_DIR overrides work in tests.
+  local state_file; state_file="$(dirname "$(_reg "$team")")/team-$team.sync"
+  local prev_pill="" prev_reported_titles=""
+  if [ -f "$state_file" ]; then
+    prev_pill=$(head -1 "$state_file" 2>/dev/null || true)
+    prev_reported_titles=$(tail -n +2 "$state_file" 2>/dev/null || true)
+  fi
+
+  # Log overall phase/count change
+  if [ "$pill" != "$prev_pill" ]; then
+    cmux log --source team "$team: $pill" --workspace "$ws" 2>/dev/null || true
+  fi
+
+  # Build current reported titles list; log each new completion
+  local cur_reported_titles=""
+  while IFS= read -r row; do
+    [ -z "$row" ] && continue
+    local _lay _title _rundir
+    _lay=$(awk '{print $3}' <<<"$row")
+    [ "$_lay" = dash ] && continue
+    _title=$(awk '{print $4}' <<<"$row")
+    _rundir=$(awk 'NF>=7{print $7}' <<<"$row")
+    [ "${_rundir:-}" = - ] && _rundir=
+    local _run="${_rundir:-$fallback_run}"
+    local _role="${_title#"$team"-}"
+    if [ -n "$_run" ] && [ -f "$_run/reports/$_role.md" ]; then
+      cur_reported_titles="${cur_reported_titles}${_title}"$'\n'
+      if ! printf '%s\n' "$prev_reported_titles" | grep -qxF "$_title" 2>/dev/null; then
+        cmux log --source team "$_title: reported" --workspace "$ws" 2>/dev/null || true
+      fi
+    fi
+  done < "$reg"
+
+  # Write current state (never fatal)
+  { printf '%s\n' "$pill"; printf '%s' "$cur_reported_titles"; } > "$state_file" 2>/dev/null || true
 }
+
+# sub_sync_clear <team> — shorthand for close path in team.sh
+sub_sync_clear() { sub_sync --clear "${1:?team}"; }
