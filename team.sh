@@ -41,9 +41,11 @@
 #   team.sh role-promote <name> [--force]  -> copy a project role into the shared library, secret/PII scan first;
 #                                             library ahead always refuses (run role-pull).
 #                                             exit 0 ok/no-op, 2 bad name/option or PII hit, 3 not in project, 5 conflict (needs --force)
-#   team.sh status [--watch] <team>        -> one row per teammate: ROLE | MILESTONE | STEP | LAST_ACTIVITY | FLAGS;
-#                                             --watch refreshes every 30s (Ctrl-C stops). exit 3 no registry
-#   team.sh monitor <team>                 -> open one small auto-refreshing status pane (layout dash, title
+#   team.sh status [--watch] <team>        -> one frame: "<team> · N/M reported · HH:MM:SS", a progress bar, a NEEDS YOU block
+#                                             (only when a teammate is waiting/dead/model gone/stalled?), then ROLE | STATE | STEP | AGE;
+#                                             --watch repaints only on change, syncs the sidebar each tick and exits once
+#                                             the registry is removed. Width: TEAM_COLS, else tput cols. exit 3 no registry
+#   team.sh monitor <team>                 -> open one pane running `status --watch` (layout dash, title
 #                                             <team>-monitor; not a teammate, not in the cap; `close` closes it).
 #                                             exit 1 already running
 #   team.sh sync [--clear] <team>          -> lead sidebar status pill + progress bar and a `cmux log --source team`
