@@ -21,14 +21,18 @@ unset TEAM_MEMBER NO_COLOR TEAM_FORCE_COLOR TEAM_COLS
 
 # ── stub cmux: identify answers "gone" for refs listed in $CMUX_GONE_REFS; everything else is empty ──
 mkdir -p "$W/bin"
+CMUX_LOG="$W/cmux.log"; : > "$CMUX_LOG"; export CMUX_LOG
 cat > "$W/bin/cmux" <<'SH'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >> "$CMUX_LOG"
 case "$1" in
   ping) echo PONG ;;
   --version) echo "cmux 0.65.0 (108) stub" ;;
   identify)
     surf=""; prev=""
     for a; do [ "$prev" = "--surface" ] && surf="$a"; prev="$a"; done
+    case " ${CMUX_ERR_REFS:-} " in *" $surf "*) echo "Error: timeout" >&2; exit 1 ;; esac
+    case " ${CMUX_NOTFOUND_REFS:-} " in *" $surf "*) echo "Error: not_found" >&2; exit 1 ;; esac
     case " ${CMUX_GONE_REFS:-} " in
       *" $surf "*) echo '{"caller":{"pane_ref":null}}' ;;
       *) echo "{\"caller\":{\"pane_ref\":\"pane-live\",\"surface_ref\":\"${surf:-surface:lead}\"}}" ;;
@@ -119,6 +123,48 @@ nrows=$(grep -cE '^  · ' <<<"$utf" || true)   # guard: 3 data rows must exist, 
   || fail "G6: UTF-8 alignment" "distinct row widths=$widths rows=$nrows; frame:
 $utf"
 
+
+# ═══ G7 — decision 63: narrow widths truncate ROLE before dropping STATE/AGE; no line wider than the terminal ═══
+longrole=r_abcdefghijklmnop1   # 18 chars
+bad=
+for cols in 20 30 40 50 72; do
+  f=$( { rec "$longrole" fx-x WAITING drafting "needs a decision" 7 ""
+         rec "${longrole}b" fx-y DEAD spawned - 2 ""
+         rec "${longrole}c" fx-z WORKING drafting "日本語のステップ説明 investigação" 3 ""; } | frame fx "$cols" 0 0 )
+  f=${f/@@CLOCK@@/00:00:00}   # the placeholder is 9 wide, the real clock 8: measure the real width
+  mw=$(dwidth <<<"$f" | sort -n | tail -1)
+  [ "${mw:-999}" -le "$cols" ] || bad+=" cols=$cols:maxwidth=$mw"
+  if [ "$cols" -ge 40 ]; then
+    # alert rows keep their state WORD (not just the glyph), every table row keeps its AGE
+    grep -E 'r_abc' <<<"$f" | sed -n '1,2p' | grep -qiE 'waiting|dead' || bad+=" cols=$cols:alert-word-lost"
+    [ "$(grep -cE '^  . r_abc.* [0-9]+m$' <<<"$f")" -ge 1 ] || bad+=" cols=$cols:age-lost"
+  fi
+done
+[ -z "$bad" ] && pass "G7: widths 20-72 with 18-char roles + CJK: no line wider than the terminal; alert rows keep the state word and table rows their AGE at >=40 cols (decision 63)" \
+  || fail "G7: narrow-width priority" "$bad"
+
+# ═══ G8 — decision 64: never glyph alone — every state has a distinct ASCII glyph ═══
+asc8=$( { for st in FINISHED WORKING WAITING DEAD MODEL_GONE IDLE STALLED UNKNOWN; do rec "r_$st" "fx-r_$st" "$st" drafting step 3 ""; done; } | frame fx 60 0 1 )
+glyphs=$(python3 -I - "$asc8" <<'PYG'
+import sys
+lines = sys.argv[1].split("\n")
+hdr = next((i for i, l in enumerate(lines) if "ROLE" in l), len(lines))
+out = {}
+for i, l in enumerate(lines):
+    t = l.split()
+    for st in ("FINISHED","WORKING","WAITING","DEAD","MODEL_GONE","IDLE","STALLED","UNKNOWN"):
+        if "r_" + st in t:
+            k = t.index("r_" + st)
+            out[st] = t[k-1] if i < hdr else t[k+1]   # alert rows: glyph before role; table rows: after
+print(" ".join(f"{k}={v}" for k, v in sorted(out.items())))
+PYG
+)
+n_states=$(wc -w <<<"$glyphs" | tr -d ' ')
+n_distinct=$(tr ' ' '\n' <<<"$glyphs" | sed 's/.*=//' | sort -u | wc -l | tr -d ' ')
+{ [ "$n_states" = 8 ] && [ "$n_distinct" = 8 ]; } \
+  && pass "G8: all 8 states have distinct ASCII glyphs (WAITING vs MODEL_GONE no longer collide) (decision 64)" \
+  || fail "G8: ASCII glyph collision" "states=$n_states distinct=$n_distinct :: $glyphs"
+
 # ═══ End-to-end fixtures ═══
 G="$W/repo"; mkdir -p "$G"; git -C "$G" init -q
 RUN="$W/run"; mkdir -p "$RUN/reports" "$RUN/status"
@@ -189,6 +235,35 @@ nrows=$(grep -cE '^  · ' <<<"$out" || true)
   && pass "E6: accented/CJK step strings, all rows same display width end to end (decision 5)" \
   || fail "E6: end-to-end UTF-8 alignment" "distinct widths=$w rows=$nrows
 $out"
+
+
+# ═══ E7 — decision 62: a transient cmux failure is UNKNOWN, never DEAD; sync does not log it at error level ═══
+{ reg_row cmux surface:110 e7-a live; reg_row cmux surface:111 e7-b live; } > "$TEAM_REG_DIR/team-e7.tabs"
+: > "$CMUX_LOG"
+out=$(status_out e7 CMUX_ERR_REFS="surface:110 surface:111")
+(cd "$G" && env CMUX_ERR_REFS="surface:110 surface:111" bash "$TEAM_SH" sync e7) >/dev/null 2>&1 || true
+if grep -qi 'unknown' <<<"$out" && ! grep -qi 'dead' <<<"$out" && ! grep -q 'NEEDS YOU' <<<"$out" \
+   && ! grep -E '^log ' "$CMUX_LOG" | grep -q -- '--level error'; then
+  pass "E7: 'Error: timeout' from cmux identify renders unknown, no NEEDS YOU, and sync logs nothing at --level error (decision 62)"
+else fail "E7: transient failure" "$out
+log: $(grep -E '^log ' "$CMUX_LOG" | head -3)"; fi
+: > "$CMUX_LOG"
+out=$(status_out e7 CMUX_NOTFOUND_REFS="surface:110 surface:111")
+(cd "$G" && env CMUX_NOTFOUND_REFS="surface:110 surface:111" bash "$TEAM_SH" sync e7) >/dev/null 2>&1 || true
+{ grep -qi 'dead' <<<"$out" && grep -q 'NEEDS YOU' <<<"$out"; } \
+  && pass "E7b: control — a definite not_found still renders dead and pins NEEDS YOU" \
+  || fail "E7b: not_found is dead" "$out"
+
+# ═══ E8 — decision 65: the clock survives narrow widths (never a stray '@') ═══
+{ reg_row cmux surface:120 e8longteamname-a live; } > "$TEAM_REG_DIR/team-e8longteamname.tabs"
+bad=
+for cols in 24 30 40 55; do
+  hl=$(status_out e8longteamname TEAM_COLS=$cols | head -1)
+  grep -q '@' <<<"$hl" && bad+=" cols=$cols:stray-@[$hl]"
+  grep -qE '[0-9]{2}:[0-9]{2}:[0-9]{2}' <<<"$hl" || bad+=" cols=$cols:no-clock[$hl]"
+done
+[ -z "$bad" ] && pass "E8: header keeps a real HH:MM:SS clock and never a stray '@' at 24-55 cols, with a long team name (decision 65)" \
+  || fail "E8: clock at narrow width" "$bad"
 
 echo; echo "status-render: $passes passed, $fails failed"
 [ "$fails" = 0 ] || exit 1
