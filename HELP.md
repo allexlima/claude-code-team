@@ -13,7 +13,8 @@ and writes the final synthesis.
     --rounds N       Challenge rounds after the first reports (default 1)
     --autoroles      Scan the project (README, layout, tests, git diff, stack) and propose
                      roles from it; waits for your OK before spawning
-    --model M        Force one model for every teammate (alias or full id).
+    --model M        Force one model for every teammate (alias or full id); a haiku-tier id
+                     puts every role in dontAsk and is refused on build runs.
                      Default: the lead picks a model per role (see Choosing models)
     --tabs           One cmux tab per teammate instead of panes
     --tmux           Force tmux even inside cmux
@@ -61,7 +62,7 @@ launched by teammates default to Sonnet when available, unless the teammate spec
 otherwise. The roster you approve shows each role's model, so you can change any of
 them before spawning, and the run record notes what each role ran on. An unrecognised
 model is refused up front rather than opening a pane on a dead session. `--model`
-forces one model everywhere.
+forces one model everywhere; a haiku-tier id puts every role in dontAsk and is refused on build runs.
 
 ## Run types
     Review run   Read-only task, or not a git repo. Teammates share the working tree;
@@ -160,9 +161,10 @@ Consensus (findings that survived challenge, with evidence) · Disputed (each
 side's best evidence) · Dropped (refuted) · Next steps.
 
 ## Notes
-- Teammates start in auto permission mode (set TEAM_PERMISSION_MODE to override).
-  Haiku-tier teammates run unattended in dontAsk mode with a read-only allowlist on
-  review runs; they are refused on build runs.
+- Non-haiku teammates start in auto permission mode (set TEAM_PERMISSION_MODE to override).
+  Haiku-tier teammates always run unattended in dontAsk mode with a per-teammate allowlist
+  (read-only, plus Edit on their own report, tasks.md and status file); TEAM_PERMISSION_MODE
+  has no effect on haiku tier; they are refused on build runs.
 - The hard cap is 8 teammates (spawn refuses beyond it).
 - Cost: every teammate is a full Claude session with its own context window,
   so cost scales with team size. Prefer 2–3 sharp roles; the lead already fits a model
