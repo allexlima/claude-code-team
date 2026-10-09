@@ -577,8 +577,14 @@ if rest:
     agew = max([dw(r['age']) for r in rest] + [3])
     # PROGRESS/ETA appear only when a teammate actually self-reported a %, so a
     # team that reports none renders exactly as before.
-    progw = 10 if (any(r['pct'] >= 0 for r in rest) and width >= 72) else 0
-    etaw = 6 if (progw and any(eta_of(r) for r in rest) and width >= 84) else 0
+    # Reserve PROGRESS/ETA only while ROLE and STATE stay readable. A fixed
+    # width gate was wrong: a teammate pane in the default grid is ~80 cols, so
+    # an 84-col gate hid the ETA almost always. STEP absorbs what is left and
+    # drops itself (show_step) when it gets too thin.
+    base = 4 + 2 + 2 + agew + 8 + 12   # prefix + gaps + AGE + min ROLE + min STATE
+    progw = 10 if (any(r['pct'] >= 0 for r in rest) and width - base >= 12) else 0
+    etaw = 6 if (progw and any(eta_of(r) for r in rest)
+                 and width - (base + 12) >= 8) else 0
     extra = progw + (2 if progw else 0) + etaw + (2 if etaw else 0)
     # role shrinks first (to 3), then the state word, so ROLE + STATE + AGE survive
     trolew = max(3, min(rolew, width - (4 + 2 + statew + 2 + agew + extra)))
@@ -742,6 +748,9 @@ sub_status() {
           [ "$mouse" = 1 ] && printf "\033[?1006l\033[?1000l"
           stty echo 2>/dev/null; printf "\033[?25h"' EXIT INT TERM
     [ "$mouse" = 1 ] && printf '\033[?1000h\033[?1006h'
+    # Input arriving while we render (between `read` calls) would otherwise be
+    # echoed into the frame by the tty driver -- mouse reports as raw escapes.
+    stty -echo 2>/dev/null || true
   fi
 
   local prev= recs frame k

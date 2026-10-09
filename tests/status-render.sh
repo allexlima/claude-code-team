@@ -317,8 +317,8 @@ f=$(printf 'd\tp-d\tWORKING\tdrafting\tdone\t1\t\t100\t30\n' | frame p 100 0 0 0
 { grep -q '100%' <<<"$f" && ! grep -q '~' <<<"$f"; }   && pass "P4: a 100% row shows the full bar and no ETA"   || fail "P4: 100% has no eta" "$f"
 
 # Narrow: the core columns must still win over PROGRESS/ETA (decisions 63-65).
-f=$(printf '%s\n' "$P_RECS" | frame p 58 0 0 0)
-{ ! grep -q 'PROGRESS' <<<"$f" && grep -q 'ROLE' <<<"$f" && grep -q 'AGE' <<<"$f"   && [ "$(dwidth <<<"$f" | sort -n | tail -1)" -le 58 ]; }   && pass "P5: at 58 cols PROGRESS/ETA drop and ROLE+STATE+AGE survive, no overflow"   || fail "P5: narrow drops progress" "$f"
+f=$(printf '%s\n' "$P_RECS" | frame p 40 0 0 0)
+{ ! grep -q 'PROGRESS' <<<"$f" && grep -q 'ROLE' <<<"$f" && grep -q 'AGE' <<<"$f"   && [ "$(dwidth <<<"$f" | sort -n | tail -1)" -le 40 ]; }   && pass "P5: at 40 cols PROGRESS/ETA drop and ROLE+STATE+AGE survive, no overflow"   || fail "P5: narrow drops progress" "$f"
 
 # An out-of-range percentage must not produce a bar wider than the column.
 f=$(printf 'd\tp-d\tWORKING\tdrafting\tgone wild · 999%%\t1\t\t-1\t5\n' | frame p 100 0 0 0)
@@ -372,6 +372,16 @@ rec=$(LC_ALL=en_US.UTF-8 TEAM_REG_DIR="$TEAM_REG_DIR" bash -c '. "$1"; _st_row "
 [ "$(cut -f8 <<<"$rec")" = "-" ] \
   && pass "P13: a status line with no percentage reports pct '-' (absent), never 0" \
   || fail "P13: absent pct" "rec=[$rec]"
+
+# A teammate pane in the default grid is ~80 cols: PROGRESS and ETA must both fit
+# there, and ETA must still appear at 56. Fixed 72/84 gates failed this.
+for w in 56 70 80; do
+  f=$(printf '%s\n' "$P_RECS" | frame p "$w" 0 0 0)
+  { grep -q 'PROGRESS' <<<"$f" && grep -q 'ETA' <<<"$f" \
+    && [ "$(dwidth <<<"$f" | sort -n | tail -1)" -le "$w" ]; } \
+    || { fail "P14: PROGRESS+ETA at $w cols" "$f"; break; }
+  [ "$w" = 80 ] && pass "P14: PROGRESS and ETA both fit at 56/70/80 cols without overflow"
+done
 
 echo; echo "status-render: $passes passed, $fails failed"
 [ "$fails" = 0 ] || exit 1
