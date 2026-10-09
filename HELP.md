@@ -224,6 +224,15 @@ team. Requires cmux; skipped under --inline.
   `TEAM_MONITOR_MOUSE=0` to keep the number keys and leave selection alone. A finished
   teammate has no pane, so focusing it just says so. One-shot `team.sh status` prints no
   numbers and takes no input.
+  The pane closes itself a few seconds after the last teammate reaches `finished`, so a
+  completed run does not leave a pane behind (`TEAM_MONITOR_AUTOCLOSE=0` keeps it open,
+  `TEAM_MONITOR_CLOSE_GRACE` sets the delay). It only closes on that *transition*: opening
+  the monitor on an already-finished run leaves it up.
+  The headline bar is the team's **average** self-reported progress (`~70%`), not the share
+  of teammates that have reported — 4 teammates at 80% is not "0% done". A reported or
+  finished teammate counts as 100. The hard `N/M reported` count stays next to it, and when
+  nobody reports a percentage the bar falls back to `N/M` and drops the `~`. The sidebar pill
+  and progress bar carry the same number as the pane.
   A PROGRESS bar and an `~ETA` appear per row only when a teammate reports a percentage on
   its status line, and only when the pane is at least 72 / 84 columns wide. Both are
   **self-reported** — the teammate's own estimate, since no measured per-teammate progress

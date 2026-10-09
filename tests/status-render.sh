@@ -314,7 +314,7 @@ f=$(printf '%s\n' "$P_NOPCT" | frame p 100 0 0 0)
 
 # A 100% row is complete, so it has no remaining time to extrapolate.
 f=$(printf 'd\tp-d\tWORKING\tdrafting\tdone\t1\t\t100\t30\n' | frame p 100 0 0 0)
-{ grep -q '100%' <<<"$f" && ! grep -q '~' <<<"$f"; }   && pass "P4: a 100% row shows the full bar and no ETA"   || fail "P4: 100% has no eta" "$f"
+{ grep -q '100%' <<<"$f" && ! grep -qE '~[0-9]+[mh]' <<<"$f"; }   && pass "P4: a 100% row shows the full bar and no ETA"   || fail "P4: 100% has no eta" "$f"
 
 # Narrow: the core columns must still win over PROGRESS/ETA (decisions 63-65).
 f=$(printf '%s\n' "$P_RECS" | frame p 40 0 0 0)
@@ -382,6 +382,113 @@ for w in 56 70 80; do
     || { fail "P14: PROGRESS+ETA at $w cols" "$f"; break; }
   [ "$w" = 80 ] && pass "P14: PROGRESS and ETA both fit at 56/70/80 cols without overflow"
 done
+
+# ---------------------------------------------------------------------------
+# A*  team-average progress on the top bar and the sidebar
+# ---------------------------------------------------------------------------
+
+# The case the average exists for: nobody has reported yet, but the team is most
+# of the way there. reported/total would say 0%.
+A_RECS=$'a\ta-a\tWORKING\tdrafting\tw\t1\t\t80\t10\nb\ta-b\tWORKING\tdrafting\tw\t1\t\t60\t10'
+f=$(printf '%s\n' "$A_RECS" | frame a 100 0 0 0)
+bar=$(sed -n '2p' <<<"$f")
+{ grep -q '0/2 reported' <<<"$f" && grep -q '~70%' <<<"$bar"; } \
+  && pass "A1: the top bar shows the team average (80+60)/2 = ~70% while 0/2 have reported" \
+  || fail "A1: average bar" "$f"
+
+# A reported teammate counts as 100 even though its status line carries no %.
+A_MIX=$'a\ta-a\tWORKING\treported\tdone\t1\t\t-1\t10\nb\ta-b\tWORKING\tdrafting\tw\t1\t\t50\t10'
+f=$(printf '%s\n' "$A_MIX" | frame a 100 0 0 0)
+grep -q '~75%' <<<"$(sed -n '2p' <<<"$f")" \
+  && pass "A2: a reported teammate counts as 100 in the average (100+50)/2 = ~75%" \
+  || fail "A2: reported counts as 100" "$f"
+
+# No self-reports anywhere: the bar stays the old reported/total, with no tilde,
+# so every pre-existing golden frame is byte-identical.
+f=$(printf '%s\n' "$P_NOPCT" | frame p 100 0 0 0)
+bar=$(sed -n '2p' <<<"$f")
+{ ! grep -q '~' <<<"$bar" && grep -q ' 0%' <<<"$bar"; } \
+  && pass "A3: with no self-reported %, the bar falls back to reported/total and drops the ~" \
+  || fail "A3: fallback" "[$bar]"
+
+# The sidebar must carry the same number as the pane (one record source).
+RUNA="$G/.team/runs/2026-10-08-a1"; mkdir -p "$RUNA/reports" "$RUNA/status"
+{ printf 'cmux surface:150 pane a1-x - - %s %s live 1 %s\n' "$RUNA" "$G" "$G"
+  printf 'cmux surface:151 pane a1-y - - %s %s live 2 %s\n' "$RUNA" "$G" "$G"; } > "$TEAM_REG_DIR/team-a1.tabs"
+printf 'working \xc2\xb7 80%%\n' > "$RUNA/status/x.txt"
+printf 'working \xc2\xb7 60%%\n' > "$RUNA/status/y.txt"
+: > "$CMUX_LOG"; sync_run a1
+prog=$(grep -E '^set-progress ' "$CMUX_LOG" | head -1)
+pill=$(grep -E '^set-status ' "$CMUX_LOG" | head -1)
+{ grep -q '0\.70' <<<"$prog" && grep -q '~70%' <<<"$pill" && grep -q '0/2 reported' <<<"$pill"; } \
+  && pass "A4: the sidebar bar is 0.70 and the pill reads '~70% · 0/2 reported' — same number as the pane" \
+  || fail "A4: sidebar average" "prog=[$prog] pill=[$pill]"
+
+# Without any self-report the sidebar keeps its old reported/total fraction.
+printf 'investigating facts\n' > "$RUNA/status/x.txt"
+printf 'investigating facts\n' > "$RUNA/status/y.txt"
+: > "$CMUX_LOG"; sync_run a1
+pill=$(grep -E '^set-status ' "$CMUX_LOG" | head -1)
+{ ! grep -q '~' <<<"$pill" && grep -q '0/2 reported' <<<"$pill"; } \
+  && pass "A5: with no self-reported %, the pill keeps 'N/M reported' and shows no ~average" \
+  || fail "A5: sidebar fallback" "pill=[$pill]"
+
+# Tab is IFS whitespace: `read` collapses consecutive tabs, so an empty field
+# silently shifts every later field left (this broke the team average once).
+# _st_row must therefore never emit an empty field -- absent values use '-'.
+RUNN="$G/.team/runs/2026-10-08-n1"; mkdir -p "$RUNN/reports" "$RUNN/status"
+printf 'plain step with no note\n' > "$RUNN/status/q.txt"
+rec=$(LC_ALL=en_US.UTF-8 TEAM_REG_DIR="$TEAM_REG_DIR" bash -c '. "$1"; _reg() { echo "'"$TEAM_REG_DIR"'/team-$1.tabs"; }; _st_row "$2" "$3" "" n1' _ "$LIB" "cmux surface:160 pane n1-q - - $RUNN $G live 1 $G" "$RUNN" 2>/dev/null || true)
+nf=$(printf '%s' "$rec" | awk -F'\t' '{print NF}')
+empty=$(printf '%s' "$rec" | awk -F'\t' '{for(i=1;i<=NF;i++) if ($i=="") print i}')
+{ [ "$nf" = 9 ] && [ -z "$empty" ]; } \
+  && pass "N10: _st_row emits 9 fields and never an empty one (tab-collapse shifts fields)" \
+  || fail "N10: record field contract" "nf=$nf empty_at=[$empty] rec=[$rec]"
+
+# And the reader must land on the right field: pct, not elapsed.
+got=$(printf '%s\n' "$rec" | bash -c 'IFS=$'"'"'\t'"'"' read -r a b c d e f g pct rest; echo "$pct"')
+[ "$got" = "-" ] \
+  && pass "N11: a positional read of the record lands pct on field 8, not elapsed" \
+  || fail "N11: field alignment" "pct=[$got] rec=[$rec]"
+
+# ---------------------------------------------------------------------------
+# AC*  the monitor closes itself once every teammate is finished
+# ---------------------------------------------------------------------------
+
+RUNAC="$G/.team/runs/2026-10-08-ac"; mkdir -p "$RUNAC/reports" "$RUNAC/status"
+printf 'working\n' > "$RUNAC/status/w.txt"
+acreg="$TEAM_REG_DIR/team-ac.tabs"
+
+# Already finished when the monitor opens: it must STAY open, otherwise asking
+# for the pane on a completed run would make it vanish immediately.
+printf 'cmux surface:170 pane ac-w - - %s %s finished - -\n' "$RUNAC" "$G" > "$acreg"
+( cd "$G" && TEAM_REG_DIR="$TEAM_REG_DIR" TEAM_STATUS_INTERVAL=1 TEAM_MONITOR_CLOSE_GRACE=0 \
+    timeout 4 bash "$TEAM_SH" status --watch ac >/dev/null 2>&1 ); rc=$?
+[ "$rc" = 124 ] \
+  && pass "AC1: a run already all-finished keeps the monitor open (no self-close on open)" \
+  || fail "AC1: closed on open" "exit=$rc (124 = still running, as required)"
+
+# Transition from live to finished: it must print the notice and exit 0.
+printf 'cmux surface:170 pane ac-w - - %s %s live - -\n' "$RUNAC" "$G" > "$acreg"
+( sleep 2; printf 'cmux surface:170 pane ac-w - - %s %s finished - -\n' "$RUNAC" "$G" > "$acreg" ) &
+flip=$!
+acout=$( cd "$G" && TEAM_REG_DIR="$TEAM_REG_DIR" TEAM_STATUS_INTERVAL=1 TEAM_MONITOR_CLOSE_GRACE=0 \
+    timeout 12 bash "$TEAM_SH" status --watch ac 2>&1 ); rc=$?
+wait "$flip" 2>/dev/null || true
+{ [ "$rc" = 0 ] && grep -q 'all teammates finished' <<<"$acout"; } \
+  && pass "AC2: when the last teammate finishes the monitor announces it and exits 0" \
+  || fail "AC2: no self-close on transition" "exit=$rc out=[$(tail -3 <<<"$acout")]"
+
+# The opt-out must hold the pane open through the same transition.
+printf 'cmux surface:170 pane ac-w - - %s %s live - -\n' "$RUNAC" "$G" > "$acreg"
+( sleep 2; printf 'cmux surface:170 pane ac-w - - %s %s finished - -\n' "$RUNAC" "$G" > "$acreg" ) &
+flip=$!
+( cd "$G" && TEAM_REG_DIR="$TEAM_REG_DIR" TEAM_STATUS_INTERVAL=1 TEAM_MONITOR_AUTOCLOSE=0 \
+    timeout 6 bash "$TEAM_SH" status --watch ac >/dev/null 2>&1 ); rc=$?
+wait "$flip" 2>/dev/null || true
+[ "$rc" = 124 ] \
+  && pass "AC3: TEAM_MONITOR_AUTOCLOSE=0 keeps the pane open after everyone finishes" \
+  || fail "AC3: opt-out ignored" "exit=$rc (124 = still running, as required)"
 
 echo; echo "status-render: $passes passed, $fails failed"
 [ "$fails" = 0 ] || exit 1

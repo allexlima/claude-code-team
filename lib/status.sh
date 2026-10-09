@@ -302,8 +302,11 @@ _st_row() {
   elif [ "$state" = DEAD ] && [ -n "$rpt" ] && [ -f "$rpt" ]; then note="report safe; resume unavailable"
   fi
 
+  # Record contract: 9 TAB-separated fields, NONE of them empty. Tab is IFS
+  # whitespace, so a reader using `read -d $'\t'` collapses consecutive tabs and
+  # silently shifts every field after an empty one. Absent values use '-'.
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$role" "$title" "$state" "$ms" "$step" "$age" "$note" "$pct" "$elapsed"
+    "$role" "$title" "$state" "$ms" "$step" "$age" "${note:--}" "$pct" "$elapsed"
 }
 
 # _st_records <reg> <run> <leadpane> <team>: one _st_row record per non-dash teammate
@@ -497,7 +500,8 @@ for line in sys.stdin:
         except (IndexError, ValueError):
             return -1
     recs.append(dict(role=f[0], title=f[1], state=f[2], ms=f[3], step=f[4],
-                     age=age(f[5]), note=f[6], pct=num(7), elapsed=num(8)))
+                     age=age(f[5]), note=('' if f[6] == '-' else f[6]),
+                     pct=num(7), elapsed=num(8)))
 
 def eta_of(r):
     # Linear extrapolation of a SELF-REPORTED percentage: a guess on a guess.
@@ -528,10 +532,19 @@ if dw(head) > width - 8:
     head = fit(head, width - 9).rstrip() + ' '
 out = [head + '@@CLOCK@@']
 barw = max(5, min(20, width - 8))
-filled = (barw * done // total) if total else 0
-pct = (100 * done // total) if total else 0
+# The bar prefers the team's AVERAGE self-reported progress over the share of
+# teammates that have reported: 4 teammates at 80% is not "0% done". A reported
+# or finished teammate counts as 100. Falls back to reported/total when nobody
+# self-reports a %, so a team that reports none renders exactly as before.
+eff = [100 if (r['ms'] == 'reported' or r['state'] == 'FINISHED') else r['pct']
+       for r in recs if (r['ms'] == 'reported' or r['state'] == 'FINISHED' or r['pct'] >= 0)]
+use_avg = any(r['pct'] >= 0 for r in recs) and bool(eff)
+pct = (sum(eff) // len(eff)) if use_avg else ((100 * done // total) if total else 0)
+filled = barw * pct // 100
 full, empty = ('#', '-') if ascii_ else ('█', '░')
-out.append(paint(full * filled, 'done') + paint(empty * (barw - filled), 'dim') + f'  {pct}%')
+# '~' marks a self-reported estimate, the same convention the ETA column uses.
+out.append(paint(full * filled, 'done') + paint(empty * (barw - filled), 'dim')
+           + ('  ~' if use_avg else '  ') + f'{pct}%')
 out.append('')
 
 alerts = [r for r in recs if STATES[r['state']][3] == 'alert']
@@ -753,6 +766,12 @@ sub_status() {
     stty -echo 2>/dev/null || true
   fi
 
+  # Auto-close: when every teammate reaches `finished` the pane has nothing left
+  # to show. Only on the TRANSITION -- a team that was already finished when the
+  # monitor opened stays open, so asking for the pane never makes it vanish.
+  local autoclose=1 was_all_fin=
+  [ "${TEAM_MONITOR_AUTOCLOSE:-1}" = 0 ] && autoclose=0
+
   local prev= recs frame k
   while [ -f "$reg" ]; do
     recs=$(_st_collect "$team" || true)
@@ -768,6 +787,23 @@ sub_status() {
       printf '\033[s\033[H%s\033[K\033[u' "${head/@@CLOCK@@/$(date '+%H:%M:%S')}"
     fi
     _st_sync_apply "$team" "$recs" || true
+
+    # all finished? (non-empty record set, every row FINISHED)
+    local allfin=
+    if [ -n "$recs" ] && ! printf '%s\n' "$recs" | awk -F'\t' 'NF>=3 && $3!="FINISHED"{found=1} END{exit !found}'; then
+      printf '%s\n' "$recs" | grep -q . && allfin=1
+    fi
+    if [ -n "$allfin" ] && [ -z "$was_all_fin" ] && [ "$autoclose" = 1 ] \
+       && [ -n "${_ST_SAW_UNFINISHED:-}" ]; then
+      printf '\n  all teammates finished — closing this pane.\n'
+      printf '  (reopen with: team.sh monitor %s · keep it with TEAM_MONITOR_AUTOCLOSE=0)\n' "$team"
+      sleep "${TEAM_MONITOR_CLOSE_GRACE:-4}"
+      if [ -n "${CMUX_SURFACE_ID:-}" ] && command -v cmux >/dev/null 2>&1; then
+        cmux close-surface --force --surface "$CMUX_SURFACE_ID" >/dev/null 2>&1 || true
+      fi
+      return 0
+    fi
+    [ -n "$allfin" ] && was_all_fin=1 || { was_all_fin=; _ST_SAW_UNFINISHED=1; }
 
     if [ "$keys" = 1 ]; then
       # The read timeout IS the refresh interval, so input never delays a repaint.
@@ -956,13 +992,22 @@ _st_sync_apply() {
   local ws="$CMUX_WORKSPACE_ID" key="team-$team"
 
   local total=0 reported=0 needs=0 started=
-  local role title state ms _step _age _note
-  while IFS=$'\t' read -r role title state ms _step _age _note; do
+  # Team average of self-reported progress: a reported/finished teammate counts
+  # as 100, a live one contributes its own % when it reported one. selfn > 0
+  # means at least one real self-report, which is what switches the bar over.
+  local pctsum=0 pctn=0 selfn=0
+  local role title state ms _step _age _note pct
+  while IFS=$'\t' read -r role title state ms _step _age _note pct _; do
     [ -n "$title" ] || continue
     total=$((total + 1))
     { [ "$ms" = reported ] || [ "$state" = FINISHED ]; } && reported=$((reported + 1))
     [ "$ms" != spawned ] && started=1
     case $state in WAITING|DEAD|MODEL_GONE|STALLED) needs=$((needs + 1)) ;; esac
+    if [ "$ms" = reported ] || [ "$state" = FINISHED ]; then
+      pctsum=$((pctsum + 100)); pctn=$((pctn + 1))
+    elif [ -n "${pct:-}" ] && [ "$pct" != - ] && [ "$pct" -ge 0 ] 2>/dev/null; then
+      pctsum=$((pctsum + pct)); pctn=$((pctn + 1)); selfn=$((selfn + 1))
+    fi
   done <<<"$recs"
 
   # Phase, pill colour and log level move together (one palette with the pane)
@@ -977,13 +1022,21 @@ _st_sync_apply() {
     phase=spawning; pill_color=$_ST_C_ACTIVE; level=progress
   fi
 
-  # Progress fraction 0.0-1.0
-  local frac="0.0"
-  if [ "$total" -gt 0 ] && command -v python3 >/dev/null 2>&1; then
+  # Progress fraction 0.0-1.0. Prefers the team average (see the loop above) so
+  # the sidebar and the pane show the same number; falls back to reported/total.
+  local frac="0.0" avg= 
+  if [ "$selfn" -gt 0 ] && [ "$pctn" -gt 0 ]; then
+    avg=$((pctsum / pctn))
+  fi
+  if [ -n "$avg" ] && command -v python3 >/dev/null 2>&1; then
+    frac=$(python3 -c "print(f'{$avg/100:.2f}')" 2>/dev/null) || frac="0.0"
+  elif [ "$total" -gt 0 ] && command -v python3 >/dev/null 2>&1; then
     frac=$(python3 -c "print(f'{$reported/$total:.2f}')" 2>/dev/null) || frac="0.0"
   fi
 
+  # '~' marks the average as self-reported; the hard N/M fact stays alongside it.
   local pill="$phase · $reported/$total reported"
+  [ -n "$avg" ] && pill="$phase · ~$avg% · $reported/$total reported"
 
   # Update sidebar (never fatal; use per-team key and explicit workspace)
   cmux set-status "$key" "$pill" --icon sparkle --color "$pill_color" \
