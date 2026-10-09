@@ -31,6 +31,12 @@ the slowest teammate sets the pace for the whole team.
   `<role>` in those paths is the bare role name without the `<team>-` prefix — a teammate
   titled `rev3-docs` writes to `<run>/status/docs.txt`, not `<run>/status/rev3-docs.txt`.
   Overwrite it each time — do not append. One line, no secrets or data.
+- **End each status line with your own rough progress**, as ` · NN%` (e.g.
+  `drafting report · 70%`). The monitor turns it into a per-teammate bar and an ETA;
+  without it that row shows no bar, which is fine — the milestone still shows. There is
+  no measured progress signal available, so this is *your* estimate: judge it against the
+  whole task you were given, not the step you are on, and do not jump to 90% because the
+  current step is nearly done. Use 100% only once your report is written.
 - **Send questions to the lead, not your own pane.** When you need the user's input, a
   decision, or sign-off on an approach, do NOT use AskUserQuestion or wait silently in your
   pane — the user is not watching it. SendMessage the lead a message whose first line is

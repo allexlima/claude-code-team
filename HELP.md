@@ -218,6 +218,17 @@ team. Requires cmux; skipped under --inline.
   frame changes, checking every 30 s (override with `TEAM_STATUS_INTERVAL`). It exits when
   the team is closed. Requires cmux. Under `--inline` there is no registry and no pane; track
   teammates by their returned reports and tasks.md.
+  In the pane each row is numbered: press that number to focus that teammate's pane, `r` to
+  repaint, `q` to quit. Clicking a row does the same. Clicking captures the mouse, so
+  click-drag no longer selects text in that pane (shift+drag still does); set
+  `TEAM_MONITOR_MOUSE=0` to keep the number keys and leave selection alone. A finished
+  teammate has no pane, so focusing it just says so. One-shot `team.sh status` prints no
+  numbers and takes no input.
+  A PROGRESS bar and an `~ETA` appear per row only when a teammate reports a percentage on
+  its status line, and only when the pane is at least 72 / 84 columns wide. Both are
+  **self-reported** — the teammate's own estimate, since no measured per-teammate progress
+  signal exists — so treat them as a rough indication, not a measurement. The ETA is a
+  linear extrapolation (`elapsed x (100 - pct) / pct`) of that estimate.
 - Say "shut down the team" to close all teammate panes/tabs (the run record stays;
   clean worktrees are removed, branches and PRs stay).
 

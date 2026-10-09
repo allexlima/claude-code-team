@@ -295,6 +295,84 @@ grep -qE -- '^log .*--level error .*c1-a: dead' "$CMUX_LOG" \
   && pass "C5: sync --clear clears the progress bar and logs 'closed' at --level info (decision 14)" \
   || fail "C5: clear" "$(cat "$CMUX_LOG")"
 
+# ---------------------------------------------------------------------------
+# P*  per-teammate self-reported progress, ETA, row keys and click mapping
+# ---------------------------------------------------------------------------
+
+# pct is field 8, elapsed-minutes field 9. 70% after 14m -> ~6m remaining.
+P_RECS=$'core\tp-core\tWORKING\tdrafting\tdrafting report\t4\t\t70\t14\ntests\tp-tests\tWORKING\tinvestigating\trunning gates\t1\t\t40\t20'
+# Same records with no percentage reported at all.
+P_NOPCT=$'core\tp-core\tWORKING\tdrafting\tdrafting report\t4\t\t-1\t-1\ntests\tp-tests\tWORKING\tinvestigating\trunning gates\t1\t\t-1\t-1'
+
+f=$(printf '%s\n' "$P_RECS" | frame p 100 0 0 0)
+{ grep -q 'PROGRESS' <<<"$f" && grep -qE '70%' <<<"$f" && grep -qE '40%' <<<"$f"; }   && pass "P1: a reported '· NN%' renders a PROGRESS column with a per-row bar"   || fail "P1: progress column" "$f"
+
+{ grep -q 'ETA' <<<"$f" && grep -qE '~6m' <<<"$f" && grep -qE '~30m' <<<"$f"; }   && pass "P2: ETA extrapolates elapsed*(100-pct)/pct and is marked '~' (70%@14m -> ~6m)"   || fail "P2: eta" "$f"
+
+f=$(printf '%s\n' "$P_NOPCT" | frame p 100 0 0 0)
+{ ! grep -q 'PROGRESS' <<<"$f" && ! grep -q 'ETA' <<<"$f" && grep -q 'STEP' <<<"$f"; }   && pass "P3: no teammate reporting a % renders no PROGRESS/ETA columns (goldens unchanged)"   || fail "P3: columns absent without pct" "$f"
+
+# A 100% row is complete, so it has no remaining time to extrapolate.
+f=$(printf 'd\tp-d\tWORKING\tdrafting\tdone\t1\t\t100\t30\n' | frame p 100 0 0 0)
+{ grep -q '100%' <<<"$f" && ! grep -q '~' <<<"$f"; }   && pass "P4: a 100% row shows the full bar and no ETA"   || fail "P4: 100% has no eta" "$f"
+
+# Narrow: the core columns must still win over PROGRESS/ETA (decisions 63-65).
+f=$(printf '%s\n' "$P_RECS" | frame p 58 0 0 0)
+{ ! grep -q 'PROGRESS' <<<"$f" && grep -q 'ROLE' <<<"$f" && grep -q 'AGE' <<<"$f"   && [ "$(dwidth <<<"$f" | sort -n | tail -1)" -le 58 ]; }   && pass "P5: at 58 cols PROGRESS/ETA drop and ROLE+STATE+AGE survive, no overflow"   || fail "P5: narrow drops progress" "$f"
+
+# An out-of-range percentage must not produce a bar wider than the column.
+f=$(printf 'd\tp-d\tWORKING\tdrafting\tgone wild · 999%%\t1\t\t-1\t5\n' | frame p 100 0 0 0)
+[ "$(dwidth <<<"$f" | sort -n | tail -1)" -le 100 ]   && pass "P6: a malformed/oversized percentage cannot overflow the pane width"   || fail "P6: pct clamp" "$f"
+
+# keys=1 (interactive monitor only) numbers the rows and prints the hint line.
+f=$(printf '%s\n' "$P_RECS" | frame p 100 0 0 1)
+{ grep -q '\[1\] ' <<<"$f" && grep -q '\[2\] ' <<<"$f" && grep -q 'focus pane' <<<"$f"; }   && pass "P7: keys=1 numbers each row [N] and shows the keybinding hint"   || fail "P7: row keys" "$f"
+
+f=$(printf '%s\n' "$P_RECS" | frame p 100 0 0 0)
+{ ! grep -q '\[1\] ' <<<"$f" && ! grep -q 'focus pane' <<<"$f"; }   && pass "P8: keys=0 (one-shot status) keeps the plain bullet and no hint line"   || fail "P8: no keys when non-interactive" "$f"
+
+# The keymap is the contract between the frame and the input loop: key, role,
+# state, and the terminal LINE the row was printed on.
+KM="$TEAM_REG_DIR/km.tsv"
+printf '%s\n' "$P_RECS" | TEAM_KEYMAP_OUT="$KM" frame p 100 0 0 1 >/dev/null
+line1=$(awk -F'\t' '$1=="1"{print $4}' "$KM")
+f=$(printf '%s\n' "$P_RECS" | frame p 100 0 0 1)
+got=$(sed -n "${line1:-0}p" <<<"$f")
+{ [ -n "$line1" ] && grep -q '\[1\] ' <<<"$got"; }   && pass "P9: keymap line numbers address the row the frame actually printed"   || fail "P9: keymap line mapping" "line1=$line1 got=[$got]"
+
+# Alerts come first, so keys are numbered across both blocks without collision.
+A_RECS=$'t\tp-t\tWAITING\tinvestigating\tneeds input\t2\t\t-1\t-1\nc\tp-c\tWORKING\tdrafting\twork\t1\t\t70\t14'
+printf '%s\n' "$A_RECS" | TEAM_KEYMAP_OUT="$KM" frame p 100 0 0 1 >/dev/null
+{ [ "$(awk -F'\t' '$1=="1"{print $2}' "$KM")" = t ]   && [ "$(awk -F'\t' '$1=="2"{print $2}' "$KM")" = c ]   && [ "$(wc -l < "$KM" | tr -d ' ')" = 2 ]; }   && pass "P10: row keys run across NEEDS YOU then the table, one key per teammate"   || fail "P10: key ordering" "$(cat "$KM")"
+
+# _st_click: release on a row focuses it; press, wheel, blank lines and junk do not.
+clicks=$(LC_ALL=en_US.UTF-8 bash -c '
+  . "$1"; _st_focus_role() { echo "FOCUS:$2"; return 0; }
+  for s in "[<0;9;5m" "[<0;9;99m" "[<0;9;5M" "[<64;9;5m" "junk"; do
+    _st_click demo "$2" "$s" >/dev/null 2>&1 && echo "acted:$s" || echo "ignored:$s"
+  done' _ "$LIB" "$KM" 2>/dev/null || true)
+nacted=$(grep -c '^acted:' <<<"$clicks" || true)
+{ [ "$nacted" = 1 ] && grep -q 'acted:\[<0;9;5m' <<<"$clicks"; }   && pass "P11: _st_click acts on a release over a row only — press, wheel, blank line and junk ignored"   || fail "P11: click guards" "$clicks"
+
+# The clamp itself lives in the record layer (_st_row), not the formatter: an
+# out-of-range "999%" must become 100 and must not be left in the STEP text.
+RUNP="$G/.team/runs/2026-10-08-p1"; mkdir -p "$RUNP/reports" "$RUNP/status"
+printf 'cmux surface:140 pane p1-w - - %s %s live 9999 %s\n' "$RUNP" "$G" "$G" > "$TEAM_REG_DIR/team-p1.tabs"
+printf 'gone wild \xc2\xb7 999%%\n' > "$RUNP/status/w.txt"
+rec=$(LC_ALL=en_US.UTF-8 TEAM_REG_DIR="$TEAM_REG_DIR" bash -c '. "$1"; _st_row "$2" "$3" "" p1' _ "$LIB" "cmux surface:140 pane p1-w - - $RUNP $G live 9999 $G" "$RUNP" 2>/dev/null || true)
+gotpct=$(cut -f8 <<<"$rec"); gotstep=$(cut -f5 <<<"$rec")
+{ [ "${gotpct:-x}" = 100 ] && [ "${gotstep:-x}" = "gone wild" ]; } \
+  && pass "P12: record layer clamps '999%' to 100 and strips it from the STEP text" \
+  || fail "P12: pct clamp in _st_row" "pct=[$gotpct] step=[$gotstep] rec=[$rec]"
+
+# A percentage the teammate never wrote stays absent (-1), not 0 -- 0% would draw
+# an empty bar and claim "no progress", which is a different statement.
+printf 'investigating facts\n' > "$RUNP/status/w.txt"
+rec=$(LC_ALL=en_US.UTF-8 TEAM_REG_DIR="$TEAM_REG_DIR" bash -c '. "$1"; _st_row "$2" "$3" "" p1' _ "$LIB" "cmux surface:140 pane p1-w - - $RUNP $G live 9999 $G" "$RUNP" 2>/dev/null || true)
+[ "$(cut -f8 <<<"$rec")" = "-" ] \
+  && pass "P13: a status line with no percentage reports pct '-' (absent), never 0" \
+  || fail "P13: absent pct" "rec=[$rec]"
+
 echo; echo "status-render: $passes passed, $fails failed"
 [ "$fails" = 0 ] || exit 1
 echo "all passed ($passes cases)"

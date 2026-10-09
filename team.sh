@@ -226,6 +226,10 @@ _pane_of() {
 }
 # "<pane_ref> <surface_ref>" of the calling session (the lead), or empty.
 _lead_pane() {
+  # TEAM_LEAD_PANE overrides discovery: inside the monitor pane `cmux identify`
+  # would resolve the monitor itself as the lead, so `show` dispatched from the
+  # monitor's key handler would focus into the wrong pane.
+  if [ -n "${TEAM_LEAD_PANE:-}" ]; then printf '%s\n' "$TEAM_LEAD_PANE"; return 0; fi
   cmux identify 2>/dev/null \
     | python3 -c 'import json,sys; c=json.load(sys.stdin).get("caller") or {}; print(c.get("pane_ref") or "", c.get("surface_ref") or "")' 2>/dev/null || true
 }

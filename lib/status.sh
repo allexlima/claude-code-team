@@ -190,6 +190,26 @@ _st_row() {
     step="${raw:--}"
   fi
 
+  # ------ PROGRESS (optional "· NN%" suffix the teammate self-reports) ----
+  # Self-reported, never measured: cmux exposes no per-teammate progress signal.
+  local pct=-
+  if [[ "$step" =~ ([0-9]{1,3})%[[:space:]]*$ ]]; then
+    pct="${BASH_REMATCH[1]}"
+    [ "$pct" -gt 100 ] && pct=100
+    step=$(printf '%s' "$step" | sed -E 's/[[:space:]]*(·|\xc2\xb7)?[[:space:]]*[0-9]{1,3}%[[:space:]]*$//')
+    [ -n "$step" ] || step='-'
+  fi
+
+  # ------ ELAPSED (since this round's spawn; sysprompt mtime is written then) --
+  local elapsed=-1
+  local spf; spf="$(dirname "$(_reg "$team")")/team-$team-$role.sysprompt.md"
+  if [ -f "$spf" ]; then
+    local st; st=$(stat -f %m "$spf" 2>/dev/null || stat -c %Y "$spf" 2>/dev/null) || true
+    if [ -n "${st:-}" ]; then
+      local n2; n2=$(date +%s); elapsed=$(( (n2 - st) / 60 ))
+    fi
+  fi
+
   # ------ LAST_ACTIVITY (age of newest {report, status} mtime) ------------
   local newest=0 age=-1
   local f t
@@ -282,8 +302,8 @@ _st_row() {
   elif [ "$state" = DEAD ] && [ -n "$rpt" ] && [ -f "$rpt" ]; then note="report safe; resume unavailable"
   fi
 
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$role" "$title" "$state" "$ms" "$step" "$age" "$note"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$role" "$title" "$state" "$ms" "$step" "$age" "$note" "$pct" "$elapsed"
 }
 
 # _st_records <reg> <run> <leadpane> <team>: one _st_row record per non-dash teammate
@@ -392,6 +412,7 @@ import os, sys, unicodedata
 # argv: team width color(0|1) ascii(0|1); stdin: TSV records
 # role  title  state  milestone  step  age_min(-1 = none)  note
 team, width, color, ascii_ = sys.argv[1], int(sys.argv[2]), sys.argv[3] == '1', sys.argv[4] == '1'
+keys = len(sys.argv) > 5 and sys.argv[5] == '1'
 sys.stdin.reconfigure(encoding='utf-8', errors='replace')
 sys.stdout.reconfigure(encoding='ascii' if ascii_ else 'utf-8', errors='replace')
 
@@ -470,7 +491,28 @@ for line in sys.stdin:
     f = line.rstrip('\n').split('\t')
     if len(f) < 7 or f[2] not in STATES:
         continue
-    recs.append(dict(role=f[0], title=f[1], state=f[2], ms=f[3], step=f[4], age=age(f[5]), note=f[6]))
+    def num(i):
+        try:
+            return int(f[i])
+        except (IndexError, ValueError):
+            return -1
+    recs.append(dict(role=f[0], title=f[1], state=f[2], ms=f[3], step=f[4],
+                     age=age(f[5]), note=f[6], pct=num(7), elapsed=num(8)))
+
+def eta_of(r):
+    # Linear extrapolation of a SELF-REPORTED percentage: a guess on a guess.
+    # Rendered with a leading ~ and only when the teammate reported a %.
+    if r['pct'] <= 0 or r['pct'] >= 100 or r['elapsed'] < 0:
+        return ''
+    return '~' + age(r['elapsed'] * (100 - r['pct']) // r['pct'])
+
+def bar_of(r, w=5):
+    if r['pct'] < 0:
+        return ' ' * (w + 5)
+    full, empty = ('#', '-') if ascii_ else ('█', '░')
+    fl = w * r['pct'] // 100
+    return (paint(full * fl, 'done') + paint(empty * (w - fl), 'dim')
+            + f"{r['pct']}%".rjust(5))
 
 def sym(st):
     u, a, word, role = STATES[st]
@@ -496,6 +538,11 @@ alerts = [r for r in recs if STATES[r['state']][3] == 'alert']
 rest = [r for r in recs if STATES[r['state']][3] != 'alert']
 alerts.sort(key=lambda r: ORDER.index(r['state']))
 rest.sort(key=lambda r: ORDER.index(r['state']))
+
+# Row keys in display order (alerts first). Written out so the monitor's input
+# loop dispatches on the same ordering the frame shows -- no duplicated sort.
+for i, r in enumerate(alerts + rest, 1):
+    r['key'] = i if i < 10 else ''
 rolew = min(18, max([dw(r['role']) for r in recs] + [4]))
 
 if alerts:
@@ -512,7 +559,9 @@ if alerts:
         msgw = width - (4 + 2 + arolew + 2 + 2 + agew)
         if dw(msg) > msgw:
             msg = word if msgw < dw(word) + dw(sep) + 4 else msg
-        line = '    ' + paint(s, 'alert') + ' ' + fit(r['role'], arolew) + '  '
+        line = (f"[{r['key']}] " if keys else '    ')
+        line += paint(s, 'alert') + ' ' + fit(r['role'], arolew) + '  '
+        r['line'] = len(out) + 1
         line += fit(msg, max(msgw, dw(word))) + '  ' + r['age'].rjust(agew)
         out.append(line.rstrip())
     out.append('')
@@ -526,22 +575,33 @@ if rest:
     labels = [label(r) for r in rest]
     statew = max([dw(s + ' ' + w) for s, w in labels] + [5])
     agew = max([dw(r['age']) for r in rest] + [3])
+    # PROGRESS/ETA appear only when a teammate actually self-reported a %, so a
+    # team that reports none renders exactly as before.
+    progw = 10 if (any(r['pct'] >= 0 for r in rest) and width >= 72) else 0
+    etaw = 6 if (progw and any(eta_of(r) for r in rest) and width >= 84) else 0
+    extra = progw + (2 if progw else 0) + etaw + (2 if etaw else 0)
     # role shrinks first (to 3), then the state word, so ROLE + STATE + AGE survive
-    trolew = max(3, min(rolew, width - (4 + 2 + statew + 2 + agew)))
-    statew = max(3, min(statew, width - (4 + trolew + 2 + 2 + agew)))
-    stepw = width - (4 + trolew + 2 + statew + 2 + 2 + agew)
+    trolew = max(3, min(rolew, width - (4 + 2 + statew + 2 + agew + extra)))
+    statew = max(3, min(statew, width - (4 + trolew + 2 + 2 + agew + extra)))
+    stepw = width - (4 + trolew + 2 + statew + 2 + 2 + agew + extra)
     show_step = width >= 60 and stepw >= 8
     head = '    ' + fit('ROLE', trolew) + '  ' + fit('STATE', statew) + '  '
-    head += (fit('STEP', stepw) + '  ' if show_step else '') + 'AGE'.rjust(agew)
+    head += (fit('STEP', stepw) + '  ' if show_step else '')
+    head += (fit('PROGRESS', progw) + '  ' if progw else '')
+    head += ('ETA'.rjust(etaw) + '  ' if etaw else '') + 'AGE'.rjust(agew)
     out.append(paint(head.rstrip(), 'dim'))
     for r, (s, word) in zip(rest, labels):
         role = STATES[r['state']][3]
         step = r['step']
         if r['note']:
             step = r['note'] if step == '-' else f"{r['note']}{sep}{step}"
-        line = '  ' + ('-' if ascii_ else '·') + ' ' + fit(r['role'], trolew) + '  '
+        line = (f"[{r['key']}] " if keys else '  ' + ('-' if ascii_ else '·') + ' ')
+        line += fit(r['role'], trolew) + '  '
+        r['line'] = len(out) + 1
         line += paint(s, role) + ' ' + fit(word, statew - dw(s) - 1) + '  '
-        line += (fit(step, stepw) + '  ' if show_step else '') + r['age'].rjust(agew)
+        line += (fit(step, stepw) + '  ' if show_step else '')
+        line += (bar_of(r) + '  ' if progw else '')
+        line += (eta_of(r).rjust(etaw) + '  ' if etaw else '') + r['age'].rjust(agew)
         out.append(line.rstrip())
 
 def clip(line):
@@ -559,6 +619,24 @@ def clip(line):
             return res + ('\x1b[0m' if color else '')
         res += cl; vis += dw(cl)
     return res
+
+km = os.environ.get('TEAM_KEYMAP_OUT')
+if km:
+    try:
+        with open(km, 'w') as fh:
+            for r in alerts + rest:
+                fh.write(f"{r.get('key') or ''}\t{r['role']}\t{r['state']}"
+                         f"\t{r.get('line') or 0}\n")
+    except OSError:
+        pass
+
+# Keybinding hint: a keyboard feature the user cannot see is a keyboard feature
+# they will not use. Only in the interactive monitor, and only if a row has a key.
+nkeys = sum(1 for r in (alerts + rest) if r.get('key'))
+if keys and nkeys:
+    rng = '1' if nkeys == 1 else f'1-{nkeys}'
+    out.append('')
+    out.append(paint(f'  {rng} focus pane{sep}r refresh{sep}q quit', 'dim'))
 
 print('\n'.join([out[0]] + [clip(l) for l in out[1:]]))
 PY
@@ -649,10 +727,28 @@ sub_status() {
   local interval=${TEAM_STATUS_INTERVAL:-30}
   case $interval in *[!0-9]*|'') interval=30 ;; esac
   [ "$interval" -lt 1 ] && interval=1
-  local prev= recs frame
+  # Interactive only when stdin is a tty: `read -t` on a pipe returns EOF
+  # immediately, which would spin the loop instead of waiting.
+  local keys=0
+  [ -t 0 ] && keys=1
+  local km= mouse=0
+  if [ "$keys" = 1 ]; then
+    km=$(mktemp "${TMPDIR:-/tmp}/team-keymap.XXXXXX") || km=
+    # Mouse capture takes click-drag away from the terminal's own text selection
+    # (shift+drag still selects). TEAM_MONITOR_MOUSE=0 opts out and keeps the keys.
+    [ "${TEAM_MONITOR_MOUSE:-1}" != 0 ] && mouse=1
+    # Leave the terminal as we found it on every exit path, mouse mode included.
+    trap 'rm -f "$km" 2>/dev/null
+          [ "$mouse" = 1 ] && printf "\033[?1006l\033[?1000l"
+          stty echo 2>/dev/null; printf "\033[?25h"' EXIT INT TERM
+    [ "$mouse" = 1 ] && printf '\033[?1000h\033[?1006h'
+  fi
+
+  local prev= recs frame k
   while [ -f "$reg" ]; do
     recs=$(_st_collect "$team" || true)
-    frame=$(printf '%s\n' "$recs" | _st_frame "$team" "$(_st_cols)" "$color" "$ascii")
+    frame=$(printf '%s\n' "$recs" \
+      | TEAM_KEYMAP_OUT="$km" _st_frame "$team" "$(_st_cols)" "$color" "$ascii" "$keys")
     if [ "$frame" != "$prev" ]; then
       clear || true
       printf '%s\n' "${frame/@@CLOCK@@/$(date '+%H:%M:%S')}"
@@ -663,8 +759,76 @@ sub_status() {
       printf '\033[s\033[H%s\033[K\033[u' "${head/@@CLOCK@@/$(date '+%H:%M:%S')}"
     fi
     _st_sync_apply "$team" "$recs" || true
-    sleep "$interval"
+
+    if [ "$keys" = 1 ]; then
+      # The read timeout IS the refresh interval, so input never delays a repaint.
+      k=
+      if read -rsn1 -t "$interval" k 2>/dev/null; then
+        case $k in
+          q|Q) return 0 ;;
+          r|R) prev= ;;
+          [1-9]) _st_focus "$team" "$km" "$k" && prev= ;;
+          $'\033')
+            # Possible SGR mouse report: ESC [ < btn ; col ; row (M press | m release).
+            local seq= c
+            while read -rsn1 -t 0.2 c 2>/dev/null; do
+              seq+=$c
+              case $c in [Mm]) break ;; esac
+              [ ${#seq} -lt 24 ] || break
+            done
+            _st_click "$team" "$km" "$seq" && prev=
+            ;;
+        esac
+      fi
+    else
+      sleep "$interval"
+    fi
   done
+}
+
+# _st_click <team> <keymap> <seq>: map an SGR mouse release to the row on that
+# terminal line and focus it. Ignores presses (so one click acts once), drags and
+# wheel events. Returns 1 when the click landed on no row.
+_st_click() {
+  local team=$1 km=$2 seq=$3
+  [ -n "$km" ] && [ -f "$km" ] || return 1
+  # Act on release only: "[<0;COL;ROWm"
+  case $seq in "[<0;"*m) ;; *) return 1 ;; esac
+  local body=${seq#"[<0;"}; body=${body%m}
+  local row=${body#*;}
+  case $row in ''|*[!0-9]*) return 1 ;; esac
+  local role state
+  role=$(awk -F'\t' -v r="$row" '$4==r{print $2; exit}' "$km")
+  state=$(awk -F'\t' -v r="$row" '$4==r{print $3; exit}' "$km")
+  [ -n "$role" ] || return 1
+  _st_focus_role "$team" "$role" "$state"
+}
+
+# _st_focus <team> <keymap> <key>: focus the pane of the row that key labels.
+# Returns 1 (no repaint) when the key names no row or the teammate has no pane.
+_st_focus() {
+  local team=$1 km=$2 key=$3
+  [ -n "$km" ] && [ -f "$km" ] || return 1
+  local role state
+  role=$(awk -F'\t' -v k="$key" '$1==k{print $2; exit}' "$km")
+  state=$(awk -F'\t' -v k="$key" '$1==k{print $3; exit}' "$km")
+  [ -n "$role" ] || return 1
+  _st_focus_role "$team" "$role" "$state"
+}
+
+# _st_focus_role <team> <role> <state>: the one focus path, shared by key and click.
+_st_focus_role() {
+  local team=$1 role=$2 state=$3
+  # A finished teammate has no session and no pane; say so instead of a bare exit 3.
+  if [ "$state" = FINISHED ]; then
+    printf '\n  %s has finished — no pane to focus. Its report is in the run dir.\n' "$role"
+    sleep 2
+    return 0
+  fi
+  local script="${TEAM_SCRIPT:-$(dirname "${BASH_SOURCE[0]}")/../team.sh}"
+  bash "$script" show "$team" "$role" 2>&1 | tail -2 || true
+  sleep 1
+  return 0
 }
 
 # ---------------------------------------------------------------------------
