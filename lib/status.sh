@@ -754,16 +754,16 @@ sub_sync() {
   local key="team-$team"  # per-team key prevents two teams clobbering each other
 
   if [ -n "$clear" ]; then
-    cmux clear-status "$key" --workspace "$ws" 2>/dev/null || true
+    cmux clear-status "$key" --workspace "$ws" >/dev/null 2>&1 || true
     # Only clear the progress bar if no other team-* key exists in this workspace.
     # clear-progress is workspace-wide; two teams sharing a workspace must not
     # wipe each other's bar.
     local other_key
     other_key=$(cmux list-status --workspace "$ws" 2>/dev/null \
       | grep -oE '^team-[^=]+' | grep -vF "$key" | head -1 || true)
-    [ -z "$other_key" ] && cmux clear-progress --workspace "$ws" 2>/dev/null || true
+    [ -z "$other_key" ] && cmux clear-progress --workspace "$ws" >/dev/null 2>&1 || true
     cmux log --source team --level info "team $team: closed" \
-      --workspace "$ws" 2>/dev/null || true
+      --workspace "$ws" >/dev/null 2>&1 || true
     # Remove state file so a reuse of this slug starts fresh
     rm -f "$(dirname "$(_reg "$team")")/team-$team.sync" 2>/dev/null || true
     return 0
@@ -814,8 +814,8 @@ _st_sync_apply() {
 
   # Update sidebar (never fatal; use per-team key and explicit workspace)
   cmux set-status "$key" "$pill" --icon sparkle --color "$pill_color" \
-    --priority "$_ST_PILL_PRIORITY" --workspace "$ws" 2>/dev/null || true
-  cmux set-progress "$frac" --label "$team" --workspace "$ws" 2>/dev/null || true
+    --priority "$_ST_PILL_PRIORITY" --workspace "$ws" >/dev/null 2>&1 || true
+  cmux set-progress "$frac" --label "$team" --workspace "$ws" >/dev/null 2>&1 || true
 
   # Transition logging. State file: line 1 = last pill, then "title<TAB>state<TAB>ms"
   # per teammate. Derived from _reg's directory so TEAM_REG_DIR overrides work in tests.
@@ -827,7 +827,7 @@ _st_sync_apply() {
   fi
 
   if [ "$pill" != "$prev_pill" ]; then
-    cmux log --source team --level "$level" "$team: $pill" --workspace "$ws" 2>/dev/null || true
+    cmux log --source team --level "$level" "$team: $pill" --workspace "$ws" >/dev/null 2>&1 || true
   fi
 
   local cur_rows="" prev pstate pms msg lvl
@@ -852,7 +852,7 @@ _st_sync_apply() {
       msg=reported lvl=success
     fi
     [ -n "$msg" ] && { cmux log --source team --level "$lvl" "$title: $msg" \
-      --workspace "$ws" 2>/dev/null || true; }
+      --workspace "$ws" >/dev/null 2>&1 || true; }
   done <<<"$recs"
 
   # Write current state (never fatal)
