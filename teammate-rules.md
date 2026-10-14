@@ -37,6 +37,33 @@ the slowest teammate sets the pace for the whole team.
   no measured progress signal available, so this is *your* estimate: judge it against the
   whole task you were given, not the step you are on, and do not jump to 90% because the
   current step is nearly done. Use 100% only once your report is written.
+- **Do web frontend / UI QA, review, and tests in the cmux integrated browser.** Whenever your
+  work needs a rendered page (checking a UI change, reproducing a frontend bug, clicking
+  through a flow, capturing visual evidence), drive it with `cmux browser`, not
+  Playwright, Chrome DevTools MCP, or an external browser. Reference:
+  https://cmux.com/docs/browser-automation (`cmux browser --help` for exact flags).
+  - Open your own surface: `cmux browser open <url>` prints `OK surface=surface:N …`. It opens
+    in your workspace without taking focus. Pass that `surface:N` on **every** later call
+    (`cmux browser surface:N <subcommand>`) and never drive a surface you did not open.
+  - Be frugal with panes: open **one** browser surface for your whole task and reuse it.
+    Go to the next page with `navigate <url>` (or `back`/`forward`/`reload`) on that same
+    surface, not another `open`. Only when you need two pages live at once, add a tab in
+    the same pane: `cmux --json browser surface:N tab new <url>` returns its `surface_ref`
+    (same `pane_ref`). Never use `open-split` or a second `open` to get a fresh page.
+  - Wait before you inspect: `wait --load-state complete --timeout-ms 15000`, or
+    `wait --selector|--text|--url-contains|--function`.
+  - Interact: `click`, `fill <css> --text <t>`, `type`, `press <Key>`, `select`, `check`, `scroll`,
+    `hover`. Add `--snapshot-after` to mutating actions so you see what they did.
+  - Inspect: `snapshot --interactive --compact`, `get text|value|attr|count|styles <css>`,
+    `is visible|enabled|checked <css>`, `find role <role> --name <n>`, `eval <js>`,
+    `viewport <w> <h>` for responsive checks.
+  - Evidence: `mkdir -p <run>/evidence`, then `screenshot --out <run>/evidence/<role>-<step>.png`,
+    plus `console list` and `errors list`, for every pass or fail you report. Cite those files in your report. A
+    UI claim without a snapshot, getter result, or screenshot counts as unverified.
+  - Never type real credentials or customer data into a page. Read secrets from env vars
+    (`--text "$PASSWORD"`) and never echo them into your report or status line.
+  - Clean up before reporting: `cmux close-surface --surface surface:N` for every surface
+    and tab you opened. If `cmux` is not available (--inline mode), say so in your report instead of switching tools quietly.
 - **Send questions to the lead, not your own pane.** When you need the user's input, a
   decision, or sign-off on an approach, do NOT use AskUserQuestion or wait silently in your
   pane — the user is not watching it. SendMessage the lead a message whose first line is
