@@ -25,6 +25,8 @@
 #                                  not grow since spawn or gained no new PARALLELISM: line, tasks.md lacks
 #                                  "- [x] <team>-<role>:", or its --worktree has uncommitted changes; exit 3 not
 #                                  recorded; exit 1 the close failed (row stays finished; re-run to retry)
+#   finish, close and reap --yes also close the browser surfaces a teammate listed in <run>/browser/<role>.txt
+#   (only refs still of type browser; best-effort: a failure warns, keeps the ref for a retry, never changes the exit code)
 #   team.sh show <team> <role>  -> bring a teammate's pane to the front and focus it (a --tabs teammate is first
 #                                  moved out of your pane into its own); exit 3 finished, gone or not recorded,
 #                                  exit 1 cmux could not resolve its pane (it may still be running)
@@ -289,19 +291,38 @@ _row_root() {
   fi
   (cd -P "$r" 2>/dev/null && pwd) || echo "$r"
 }
-# "<surface_ref>TAB<title>" for every live cmux surface (all windows). Closing by ref alone is unsafe:
-# a gone surface's small ref can be reused by an unrelated live one, so callers match the title too.
+# "<surface_ref>TAB<title>TAB<type>" for every live cmux surface (all windows). Closing by ref alone is
+# unsafe: a gone surface's small ref can be reused by an unrelated live one, so callers match the title
+# (or, for a teammate's browser, the type) too.
 _surface_titles() {
   cmux tree --all --json 2>/dev/null | python3 -c '
 import json, sys
 def walk(o):
     if isinstance(o, dict):
         if str(o.get("ref", "")).startswith("surface:"):
-            print(o["ref"] + "\t" + (o.get("title") or "")); return
+            print(o["ref"] + "\t" + (o.get("title") or "") + "\t" + (o.get("type") or "")); return
         for v in o.values(): walk(v)
     elif isinstance(o, list):
         for v in o: walk(v)
 walk(json.load(sys.stdin))'
+}
+# Close the browser surfaces a teammate recorded in <run-dir>/browser/<role>.txt, one ref per line
+# (teammate-rules.md has it append every `cmux browser open` / `tab new` ref there), so a teammate
+# that skipped its own cleanup does not leave pages open after its pane is gone. $3 = _surface_titles
+# output. A browser's title is its page title, so a ref is matched by type instead: only a ref that is
+# still a browser surface is closed. Best-effort (warns, never fails the caller); refs that could not be
+# closed stay in the file so the next finish/close/reap retries them, and the file goes once none are left.
+_close_browsers() {
+  local f="$1/browser/$2.txt" left="" r err
+  [ "$1" != - ] && [ -s "$f" ] || return 0
+  while read -r r _; do
+    case $r in surface:*) ;; *) continue ;; esac
+    [ "$(awk -F'\t' -v x="$r" '$1==x {print $3; exit}' <<<"$3")" = browser ] || continue
+    err=$(cmux close-surface --surface "$r" --force 2>&1 >/dev/null) && err=
+    case $err in ''|*not_found*) echo "closed browser $r ($2)" ;;
+      *) echo "could not close browser $r ($2): $err" >&2; left+="$r"$'\n' ;; esac
+  done < "$f"
+  if [ -z "$left" ]; then rm -f "$f"; else printf '%s' "$left" > "$f"; fi
 }
 # The model a teammate started without --model runs on (claude's own order): ANTHROPIC_MODEL, else
 # "model" in managed-settings, else in ~/.claude/settings.json (only TEAM_MODELS_FILE when set).
@@ -472,6 +493,7 @@ if [ "$sub" = reap ]; then
       err=$(cmux close-surface --surface "$r" --force 2>&1 >/dev/null) && err=
       case $err in *not_found*) err= ;; esac
       if [ -z "$err" ]; then echo "$t  $title  cmux $r  closed"; rm -f "$dir/team-$t-${title#"$t"-}.round"
+        _close_browsers "${rd:--}" "${title#"$t"-}" "$titles"
       else echo "$t  $title  cmux $r  could not close: $err" >&2; keep+="$row"$'\n'; held=1; failed=1; fi
     done < "$reg"
     [ -n "$yes" ] && [ -n "$ours" ] || continue
@@ -521,9 +543,10 @@ if [ "$sub" = close ]; then
   # round resumes them, and a kept row would leak into the next team that reuses this slug.
   keep=""
   while IFS= read -r row; do
-    read -r backend id _ title _ <<<"$row" || true
+    read -r backend id _ title _ _ rd _ <<<"$row" || true
     [ -n "${id:-}" ] || continue
     rm -f "$(_reg_dir)/team-$team-${title#"$team"-}.round"
+    _close_browsers "${rd:--}" "${title#"$team"-}" "$titles"
     if _finished "$row"; then echo "dropped finished $title (no pane)"; continue; fi
     if [ "$backend" != cmux ]; then echo "dropped $backend $id ($title): only cmux panes are closed now; close it by hand"; continue; fi
     cur=$(awk -F'\t' -v x="$id" '$1==x {print $2; exit}' <<<"$titles")
@@ -688,6 +711,7 @@ if [ "$sub" = finish ]; then
       if [ -z "$err" ]; then echo "closed cmux $ref"
       else echo "finish: could not close cmux $ref: $err (row is finished; re-run finish to retry)" >&2; rc=1; fi
     fi
+    _close_browsers "${rd:--}" "$role" "$titles"
   fi
   if declare -F sub_sync >/dev/null; then sub_sync "$team" || true; fi
   exit "$rc"

@@ -45,6 +45,9 @@ the slowest teammate sets the pace for the whole team.
   - Open your own surface: `cmux browser open <url>` prints `OK surface=surface:N …`. It opens
     in your workspace without taking focus. Pass that `surface:N` on **every** later call
     (`cmux browser surface:N <subcommand>`) and never drive a surface you did not open.
+    Record every surface you open (and every tab below) right away:
+    `mkdir -p <run>/browser && echo surface:N >> <run>/browser/<role>.txt`. The lead's `finish`
+    closes whatever is listed there, so a crash or a skipped cleanup does not leave pages open.
   - Be frugal with panes: open **one** browser surface for your whole task and reuse it.
     Go to the next page with `navigate <url>` (or `back`/`forward`/`reload`) on that same
     surface, not another `open`. Only when you need two pages live at once, add a tab in
